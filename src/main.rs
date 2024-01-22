@@ -155,8 +155,8 @@ pub fn create_lookup() -> [[u16; 8]; 256] {
 
 pub fn inner3(lookup: &[[u16; 8]; 256], mask: u64, a: u64, shares: &[u16; 64]) -> u16 {
 
-    let neg_bits = mask & a;
-    let pos_bits = mask & !a;
+    let neg_bits = (mask & a).to_be_bytes();
+    let pos_bits = (mask & !a).to_be_bytes();
     unsafe {
         let lookup = lookup.as_ptr();
 
@@ -166,45 +166,45 @@ pub fn inner3(lookup: &[[u16; 8]; 256], mask: u64, a: u64, shares: &[u16; 64]) -
         // Load first 32 u16s in batches of 4 x 8 u16.
         let b = vld1q_u16_x4(shares.as_ptr());
 
-        let neg_mask = vld1q_u16(lookup.add((neg_bits & 0xff) as usize) as *const u16);
-        let pos_mask = vld1q_u16(lookup.add((pos_bits & 0xff) as usize) as *const u16);
+        let neg_mask = vld1q_u16(lookup.add(neg_bits[0] as usize) as *const u16);
+        let pos_mask = vld1q_u16(lookup.add(pos_bits[0] as usize) as *const u16);
         neg = vaddq_u16(neg, vandq_u16(b.0, neg_mask));
         pos = vaddq_u16(pos, vandq_u16(b.0, pos_mask));
 
-        let neg_mask = vld1q_u16(lookup.add(((neg_bits >> 8) & 0xff) as usize) as *const u16);
-        let pos_mask = vld1q_u16(lookup.add(((pos_bits >> 8) & 0xff) as usize) as *const u16);
+        let neg_mask = vld1q_u16(lookup.add(neg_bits[1] as usize) as *const u16);
+        let pos_mask = vld1q_u16(lookup.add(pos_bits[1] as usize) as *const u16);
         neg = vaddq_u16(neg, vandq_u16(b.1, neg_mask));
         pos = vaddq_u16(pos, vandq_u16(b.1, pos_mask));
 
-        let neg_mask = vld1q_u16(lookup.add(((neg_bits >> 16) & 0xff) as usize) as *const u16);
-        let pos_mask = vld1q_u16(lookup.add(((pos_bits >> 16) & 0xff) as usize) as *const u16);
+        let neg_mask = vld1q_u16(lookup.add(neg_bits[2] as usize) as *const u16);
+        let pos_mask = vld1q_u16(lookup.add(pos_bits[2] as usize) as *const u16);
         neg = vaddq_u16(neg, vandq_u16(b.2, neg_mask));
         pos = vaddq_u16(pos, vandq_u16(b.2, pos_mask));
 
-        let neg_mask = vld1q_u16(lookup.add(((neg_bits >> 24) & 0xff) as usize) as *const u16);
-        let pos_mask = vld1q_u16(lookup.add(((pos_bits >> 24) & 0xff) as usize) as *const u16);
+        let neg_mask = vld1q_u16(lookup.add(neg_bits[3] as usize) as *const u16);
+        let pos_mask = vld1q_u16(lookup.add(pos_bits[3] as usize) as *const u16);
         neg = vaddq_u16(neg, vandq_u16(b.3, neg_mask));
         pos = vaddq_u16(pos, vandq_u16(b.3, pos_mask));
 
         let b = vld1q_u16_x4(shares[32..].as_ptr());
 
-        let neg_mask = vld1q_u16(lookup.add(((neg_bits >> 32) & 0xff) as usize) as *const u16);
-        let pos_mask = vld1q_u16(lookup.add(((pos_bits >> 32) & 0xff) as usize) as *const u16);
+        let neg_mask = vld1q_u16(lookup.add(neg_bits[4] as usize) as *const u16);
+        let pos_mask = vld1q_u16(lookup.add(pos_bits[4] as usize) as *const u16);
         neg = vaddq_u16(neg, vandq_u16(b.0, neg_mask));
         pos = vaddq_u16(pos, vandq_u16(b.0, pos_mask));
 
-        let neg_mask = vld1q_u16(lookup.add(((neg_bits >> 40) & 0xff) as usize) as *const u16);
-        let pos_mask = vld1q_u16(lookup.add(((pos_bits >> 40) & 0xff) as usize) as *const u16);
+        let neg_mask = vld1q_u16(lookup.add(neg_bits[5] as usize) as *const u16);
+        let pos_mask = vld1q_u16(lookup.add(pos_bits[5] as usize) as *const u16);
         neg = vaddq_u16(neg, vandq_u16(b.1, neg_mask));
         pos = vaddq_u16(pos, vandq_u16(b.1, pos_mask));
 
-        let neg_mask = vld1q_u16(lookup.add(((neg_bits >> 48) & 0xff) as usize) as *const u16);
-        let pos_mask = vld1q_u16(lookup.add(((pos_bits >> 48) & 0xff) as usize) as *const u16);
+        let neg_mask = vld1q_u16(lookup.add(neg_bits[6] as usize) as *const u16);
+        let pos_mask = vld1q_u16(lookup.add(pos_bits[6] as usize) as *const u16);
         neg = vaddq_u16(neg, vandq_u16(b.2, neg_mask));
         pos = vaddq_u16(pos, vandq_u16(b.2, pos_mask));
 
-        let neg_mask = vld1q_u16(lookup.add(((neg_bits >> 56) & 0xff) as usize) as *const u16);
-        let pos_mask = vld1q_u16(lookup.add(((pos_bits >> 56) & 0xff) as usize) as *const u16);
+        let neg_mask = vld1q_u16(lookup.add(neg_bits[7] as usize) as *const u16);
+        let pos_mask = vld1q_u16(lookup.add(pos_bits[7] as usize) as *const u16);
         neg = vaddq_u16(neg, vandq_u16(b.3, neg_mask));
         pos = vaddq_u16(pos, vandq_u16(b.3, pos_mask));
 
