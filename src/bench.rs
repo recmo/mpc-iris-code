@@ -1,3 +1,5 @@
+#![feature(array_chunks)]
+
 mod main;
 
 use criterion::Criterion;

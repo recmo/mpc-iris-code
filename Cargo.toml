@@ -6,7 +6,7 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [features]
-default = ["bench"]
+default = []
 bench = ["dep:criterion"]
 
 [dependencies]
@@ -16,8 +16,23 @@ ndarray = { version = "0.15.6", features = ["rayon", "blas", "matrixmultiply-thr
 rand = "0.8.5"
 wgpu = "0.19.1"
 
+# cargo bench --bench bench --features bench
 [[bench]]
 name = "bench"
 harness = false
 path = "src/bench.rs"
 required-features = ["bench"]
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+
+# samply record -- cargo bench --profile profiling --bench bench --features bench
+[profile.profiling]
+inherits = "release"
+debug = true
+
+# Compilation profile for any non-workspace member.
+# We want tfhe and other deps to always be build optimized, otherwise tests will run very slow.
+[profile.dev.package."*"]
+opt-level = 3
