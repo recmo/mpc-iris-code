@@ -5,10 +5,13 @@ use rand::{
     distributions::{Distribution, Standard},
     thread_rng, Rng,
 };
-use std::{array, mem::size_of};
+use std::{array, mem::size_of, result, arch::aarch64::vst1q_u16};
+use core::arch::aarch64::{uint16x8_t, vaddq_u16, vaddvq_u16, vld1q_u16, vld1q_u16_x4, vdupq_n_u16, vandq_u16, vceqq_u16};
 
 const BITS: usize = 16 * 200 * 4;
 const LIMBS: usize = BITS / 64;
+
+const MASK_BITS: [u16; 8] = [0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80];
 
 // OPT: If the mask is the same 64x200 pattern repeated there may be optimizations.
 
@@ -58,7 +61,7 @@ impl Distribution<SecretTemplate> for Standard {
     }
 }
 
-pub fn inner(mask: u64, a: u64, b: &[u16; 64]) -> u16 {
+pub fn inner1(mask: u64, a: u64, b: &[u16; 64]) -> u16 {
     let mut sum: u16 = 0;
     let mut bit = 1;
     for &b in b.iter() {
@@ -75,8 +78,7 @@ pub fn inner(mask: u64, a: u64, b: &[u16; 64]) -> u16 {
 }
 
 pub fn inner2(mask: u64, a: u64, shares: &[u16; 64]) -> u16 {
-    use core::arch::aarch64::{uint16x8_t, vaddq_u16, vaddvq_u16, vld1q_u16, vld1q_u16_x4, vdupq_n_u16, vandq_u16, vceqq_u16};
-    const BITS: [u16; 8] = [0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80];
+
     let neg_bits = mask & a;
     let pos_bits = mask & !a;
     unsafe {
@@ -84,12 +86,11 @@ pub fn inner2(mask: u64, a: u64, shares: &[u16; 64]) -> u16 {
         let mut pos: uint16x8_t = vdupq_n_u16(0);
 
         // Load bit selectors
-        let bit_pos = vld1q_u16(BITS.as_ptr());
+        let bit_pos = vld1q_u16(MASK_BITS.as_ptr());
 
         // Load first 32 u16s in batches of 4 x 8 u16.
         let b = vld1q_u16_x4(shares.as_ptr());
 
-        // Construct mask vectors
         let neg_mask = vceqq_u16(vandq_u16(vdupq_n_u16(neg_bits as u16), bit_pos), bit_pos);
         let pos_mask = vceqq_u16(vandq_u16(vdupq_n_u16(pos_bits as u16), bit_pos), bit_pos);
         neg = vaddq_u16(neg, vandq_u16(b.0, neg_mask));
@@ -112,7 +113,6 @@ pub fn inner2(mask: u64, a: u64, shares: &[u16; 64]) -> u16 {
 
         let b = vld1q_u16_x4(shares[32..].as_ptr());
 
-        // Construct mask vectors
         let neg_mask = vceqq_u16(vandq_u16(vdupq_n_u16((neg_bits >> 32) as u16), bit_pos), bit_pos);
         let pos_mask = vceqq_u16(vandq_u16(vdupq_n_u16((pos_bits >> 32) as u16), bit_pos), bit_pos);
         neg = vaddq_u16(neg, vandq_u16(b.0, neg_mask));
@@ -139,7 +139,101 @@ pub fn inner2(mask: u64, a: u64, shares: &[u16; 64]) -> u16 {
     }
 }
 
-pub fn distance(query: &Template, reference: &SecretTemplate) -> (u16, u16) {
+pub fn create_lookup() -> [[u16; 8]; 256] {
+    const MASK_BITS: [u16; 8] = [0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80];
+    unsafe {
+        let bit_pos = vld1q_u16(MASK_BITS.as_ptr());
+        array::from_fn(|i| {
+            let mut result = [0_u16; 8];
+            let mask = vceqq_u16(vandq_u16(vdupq_n_u16(i as u16), bit_pos), bit_pos);
+            vst1q_u16(result.as_mut_ptr(), mask);
+            result
+        
+        })
+    }
+}
+
+pub fn inner3(lookup: &[[u16; 8]; 256], mask: u64, a: u64, shares: &[u16; 64]) -> u16 {
+
+    let neg_bits = mask & a;
+    let pos_bits = mask & !a;
+    unsafe {
+        let lookup = lookup.as_ptr();
+
+        let mut neg: uint16x8_t = vdupq_n_u16(0);
+        let mut pos: uint16x8_t = vdupq_n_u16(0);
+
+        // Load first 32 u16s in batches of 4 x 8 u16.
+        let b = vld1q_u16_x4(shares.as_ptr());
+
+        let neg_mask = vld1q_u16(lookup.add((neg_bits & 0xff) as usize) as *const u16);
+        let pos_mask = vld1q_u16(lookup.add((pos_bits & 0xff) as usize) as *const u16);
+        neg = vaddq_u16(neg, vandq_u16(b.0, neg_mask));
+        pos = vaddq_u16(pos, vandq_u16(b.0, pos_mask));
+
+        let neg_mask = vld1q_u16(lookup.add(((neg_bits >> 8) & 0xff) as usize) as *const u16);
+        let pos_mask = vld1q_u16(lookup.add(((pos_bits >> 8) & 0xff) as usize) as *const u16);
+        neg = vaddq_u16(neg, vandq_u16(b.1, neg_mask));
+        pos = vaddq_u16(pos, vandq_u16(b.1, pos_mask));
+
+        let neg_mask = vld1q_u16(lookup.add(((neg_bits >> 16) & 0xff) as usize) as *const u16);
+        let pos_mask = vld1q_u16(lookup.add(((pos_bits >> 16) & 0xff) as usize) as *const u16);
+        neg = vaddq_u16(neg, vandq_u16(b.2, neg_mask));
+        pos = vaddq_u16(pos, vandq_u16(b.2, pos_mask));
+
+        let neg_mask = vld1q_u16(lookup.add(((neg_bits >> 24) & 0xff) as usize) as *const u16);
+        let pos_mask = vld1q_u16(lookup.add(((pos_bits >> 24) & 0xff) as usize) as *const u16);
+        neg = vaddq_u16(neg, vandq_u16(b.3, neg_mask));
+        pos = vaddq_u16(pos, vandq_u16(b.3, pos_mask));
+
+        let b = vld1q_u16_x4(shares[32..].as_ptr());
+
+        let neg_mask = vld1q_u16(lookup.add(((neg_bits >> 32) & 0xff) as usize) as *const u16);
+        let pos_mask = vld1q_u16(lookup.add(((pos_bits >> 32) & 0xff) as usize) as *const u16);
+        neg = vaddq_u16(neg, vandq_u16(b.0, neg_mask));
+        pos = vaddq_u16(pos, vandq_u16(b.0, pos_mask));
+
+        let neg_mask = vld1q_u16(lookup.add(((neg_bits >> 40) & 0xff) as usize) as *const u16);
+        let pos_mask = vld1q_u16(lookup.add(((pos_bits >> 40) & 0xff) as usize) as *const u16);
+        neg = vaddq_u16(neg, vandq_u16(b.1, neg_mask));
+        pos = vaddq_u16(pos, vandq_u16(b.1, pos_mask));
+
+        let neg_mask = vld1q_u16(lookup.add(((neg_bits >> 48) & 0xff) as usize) as *const u16);
+        let pos_mask = vld1q_u16(lookup.add(((pos_bits >> 48) & 0xff) as usize) as *const u16);
+        neg = vaddq_u16(neg, vandq_u16(b.2, neg_mask));
+        pos = vaddq_u16(pos, vandq_u16(b.2, pos_mask));
+
+        let neg_mask = vld1q_u16(lookup.add(((neg_bits >> 56) & 0xff) as usize) as *const u16);
+        let pos_mask = vld1q_u16(lookup.add(((pos_bits >> 56) & 0xff) as usize) as *const u16);
+        neg = vaddq_u16(neg, vandq_u16(b.3, neg_mask));
+        pos = vaddq_u16(pos, vandq_u16(b.3, pos_mask));
+
+        let neg = vaddvq_u16(neg);
+        let pos = vaddvq_u16(pos);
+        pos.wrapping_sub(neg)
+    }
+}
+
+
+pub fn distance1(query: &Template, reference: &SecretTemplate) -> (u16, u16) {
+    let mut sum: u16 = 0;
+    let mut denominator: u16 = 0;
+    for (a, a_mask, b, b_mask) in izip!(
+        query.pattern.0.iter(),
+        query.mask.0.iter(),
+        reference.pattern.0.array_chunks(),
+        reference.mask.0.iter(),
+    ) {
+        let mask = a_mask & b_mask;
+        let d = a & mask;
+        sum = sum.wrapping_add(d.count_ones() as u16);
+        denominator = denominator.wrapping_add(mask.count_ones() as u16);
+        sum = sum.wrapping_add(inner1(mask, *a, b));
+    }
+    (sum, denominator)
+}
+
+pub fn distance2(query: &Template, reference: &SecretTemplate) -> (u16, u16) {
     let mut sum: u16 = 0;
     let mut denominator: u16 = 0;
     for (a, a_mask, b, b_mask) in izip!(
@@ -157,6 +251,25 @@ pub fn distance(query: &Template, reference: &SecretTemplate) -> (u16, u16) {
     (sum, denominator)
 }
 
+
+pub fn distance3(lookup: &[[u16; 8]; 256], query: &Template, reference: &SecretTemplate) -> (u16, u16) {
+    let mut sum: u16 = 0;
+    let mut denominator: u16 = 0;
+    for (a, a_mask, b, b_mask) in izip!(
+        query.pattern.0.iter(),
+        query.mask.0.iter(),
+        reference.pattern.0.array_chunks(),
+        reference.mask.0.iter(),
+    ) {
+        let mask = a_mask & b_mask;
+        let d = a & mask;
+        sum = sum.wrapping_add(d.count_ones() as u16);
+        denominator = denominator.wrapping_add(mask.count_ones() as u16);
+        sum = sum.wrapping_add(inner3(lookup, mask, *a, b));
+    }
+    (sum, denominator)
+}
+
 fn main() {
     eprintln!("Size of Template: {}", size_of::<Template>());
     eprintln!("Size of SecretTemplate: {}", size_of::<SecretTemplate>());
@@ -164,7 +277,7 @@ fn main() {
     let mut rng = thread_rng();
     let query: Template = rng.gen();
     let reference: SecretTemplate = rng.gen();
-    let (s, d) = distance(&query, &reference);
+    let (s, d) = distance1(&query, &reference);
     eprintln!("Distance {s} / {d} = {}", (s as f64) / (d as f64));
 
     println!("Hello, world!");
@@ -195,10 +308,25 @@ pub mod benches {
         // Generate 1000 reference templates (database)
         let db: Box<[SecretTemplate]>  = (0..1000).map(|_| rng.gen()).collect();
 
-        c.bench_function("Bench query lookup", |b| b.iter(|| {
+        c.bench_function("Bench distance1 (31x100)", |b| b.iter(|| {
             for reference in &*db {
                 for query in &*queries {
-                    let (s, d) = black_box(distance(query, reference));
+                    let (s, d) = black_box(distance1(query, reference));
+                }
+            }
+        }));
+        c.bench_function("Bench distance2 (31x100)", |b| b.iter(|| {
+            for reference in &*db {
+                for query in &*queries {
+                    let (s, d) = black_box(distance2(query, reference));
+                }
+            }
+        }));
+        let lookup = create_lookup();
+        c.bench_function("Bench distance3 (31x100)", |b| b.iter(|| {
+            for reference in &*db {
+                for query in &*queries {
+                    let (s, d) = black_box(distance3(&lookup, query, reference));
                 }
             }
         }));
