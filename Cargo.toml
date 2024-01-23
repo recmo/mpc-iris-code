@@ -14,6 +14,7 @@ criterion = { version = "0.5.1", optional = true }
 itertools = "0.12.0"
 ndarray = { version = "0.15.6", features = ["rayon", "blas", "matrixmultiply-threading"] }
 rand = "0.8.5"
+rayon = "1.8.1"
 wgpu = "0.19.1"
 
 # cargo bench --bench bench --features bench
@@ -27,7 +28,7 @@ required-features = ["bench"]
 opt-level = 3
 lto = "fat"
 
-# samply record -- cargo bench --profile profiling --bench bench --features bench
+# samply record --rate 10000 -- cargo bench --profile profiling --bench bench --features bench -- --profile-time 60 distance4
 [profile.profiling]
 inherits = "release"
 debug = true
@@ -36,3 +37,6 @@ debug = true
 # We want tfhe and other deps to always be build optimized, otherwise tests will run very slow.
 [profile.dev.package."*"]
 opt-level = 3
+
+[dev-dependencies]
+proptest = "1.4.0"
