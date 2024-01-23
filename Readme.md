@@ -140,3 +140,9 @@ $$
 
 
 **Idea.** Use Freivald's algorithm to verify the matrix multiplication in MPC setting.
+
+
+https://dougallj.github.io/applecpu/firestorm.html
+
+https://kitoslab-eng.blogspot.com/2012/10/armv8-aarch64-instruction-encoding.html
+
