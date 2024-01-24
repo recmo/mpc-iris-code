@@ -5,14 +5,6 @@ mod secret_bits;
 mod template;
 
 pub use crate::{bits::Bits, secret_bits::SecretBits, template::Template};
-use bytemuck::{Pod, Zeroable};
-use itertools::izip;
-use rand::{
-    distributions::{Distribution, Standard},
-    Rng,
-};
-use serde::{Deserialize, Serialize};
-use std::fmt::Debug;
 
 pub const BITS: usize = 4 * 16 * 200;
 

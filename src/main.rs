@@ -5,20 +5,14 @@ use anyhow::{format_err, Context, Error, Result};
 use bytemuck::{bytes_of, bytes_of_mut, try_cast_slice};
 use clap::{Args, Parser, Subcommand};
 use clap_num::si_number;
-use indicatif::{
-    HumanBytes, HumanCount, ParallelProgressIterator, ProgressBar, ProgressBarIter,
-    ProgressIterator, ProgressStyle,
-};
+use indicatif::{HumanBytes, HumanCount, ProgressBar, ProgressStyle};
 use memmap::MmapOptions;
 use mpc_iris_code::{distances, preprocess, SecretBits, Template};
 use rand::{thread_rng, Rng};
 use rayon::iter::{IntoParallelIterator, ParallelIterator as _};
 use std::{
-    cmp::min,
-    fmt::format,
     fs::{File, OpenOptions},
     io::{BufReader, BufWriter, Read, Write},
-    mem::size_of,
     net::{SocketAddr, TcpListener},
     os::unix::fs::MetadataExt,
     path::PathBuf,
@@ -100,7 +94,7 @@ fn main() -> Result<()> {
 
     match args.command {
         Commands::Generate(args) => {
-            let mut file = OpenOptions::new()
+            let file = OpenOptions::new()
                 .write(true)
                 .create(true)
                 .truncate(true)
@@ -181,7 +175,6 @@ fn main() -> Result<()> {
                 .collect::<Result<_, _>>()?;
 
             // Process templates
-            let mut rng = thread_rng();
             let mut count = 0;
             for t in templates {
                 let t = t?;
@@ -192,7 +185,7 @@ fn main() -> Result<()> {
                 // TODO: Make sure pattern bits are zero where covered by mask.
 
                 // Compute secret shares
-                let shares = SecretBits::from_bits(&t.pattern, args.count);
+                let shares = SecretBits::from(&t.pattern).share(args.count);
 
                 // Write SecretBit to share files
                 for (share, file) in shares.iter().zip(outputs.iter_mut()) {

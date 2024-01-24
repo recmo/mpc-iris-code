@@ -80,7 +80,7 @@ mod tests {
     use std::fs::File;
 
     #[test]
-    // #[ignore] // Requires test data
+    #[ignore] // Requires test data
     fn test_distance_ref() {
         #[derive(Deserialize)]
         struct Distance {
