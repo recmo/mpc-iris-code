@@ -3,7 +3,7 @@
 pub mod dotprod;
 pub mod preprocess;
 
-use bytemuck::{try_cast_slice, try_cast_slice_mut, Pod, Zeroable};
+use bytemuck::{cast_slice, try_cast_slice, try_cast_slice_mut, Pod, Zeroable};
 use core::arch::aarch64::{
     uint16x8_t, vaddq_u16, vaddvq_u16, vandq_u16, vceqq_u16, vdupq_n_u16, vld1q_u16, vld1q_u16_x4,
 };
@@ -13,22 +13,32 @@ use rand::{
     thread_rng, Rng,
 };
 use serde::{de::Error as _, ser::Error as _, Deserialize, Serialize};
-use std::{arch::aarch64::vst1q_u16, array, mem::size_of};
+use std::{arch::aarch64::vst1q_u16, array, fmt::Debug, mem::size_of, process::Output};
 
-const BITS: usize = 4 * 16 * 200;
+pub const BITS: usize = 4 * 16 * 200;
 const LIMBS: usize = BITS / 64;
 
 #[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Bits([u64; LIMBS]);
+pub struct Bits(pub [u64; LIMBS]);
 
 #[repr(transparent)]
-pub struct SecretBits([u16; BITS]);
+pub struct SecretBits(pub [u16; BITS]);
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default, Serialize, Deserialize)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Default, Serialize, Deserialize)]
 pub struct Template {
-    pattern: Bits,
-    mask:    Bits,
+    pub pattern: Bits,
+    pub mask:    Bits,
+}
+
+unsafe impl Zeroable for Bits {}
+
+unsafe impl Pod for Bits {}
+
+impl Bits {
+    pub fn as_bytes(&self) -> &[u8] {
+        cast_slice(self.0.as_slice())
+    }
 }
 
 impl Default for Bits {
@@ -37,17 +47,23 @@ impl Default for Bits {
     }
 }
 
-unsafe impl Zeroable for Bits {}
-
-unsafe impl Pod for Bits {}
+impl Debug for Bits {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for limb in self.0 {
+            write!(f, "{limb:016x}")?;
+        }
+        Ok(())
+    }
+}
 
 impl Serialize for Bits {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
-        S: serde::Serializer {
-            let bytes: &[u8] = try_cast_slice(self.0.as_slice()).map_err(S::Error::custom)?;
-            hex::serialize(&bytes, serializer)
-        }
+        S: serde::Serializer,
+    {
+        let bytes: &[u8] = try_cast_slice(self.0.as_slice()).map_err(S::Error::custom)?;
+        hex::serialize(&bytes, serializer)
+    }
 }
 
 impl<'de> Deserialize<'de> for Bits {
@@ -60,6 +76,33 @@ impl<'de> Deserialize<'de> for Bits {
         let limbs = limbs.try_into().map_err(D::Error::custom)?;
         Ok(Bits(limbs))
     }
+}
+
+impl SecretBits {
+    pub fn from_bits(bits: &Bits, count: usize) -> Box<[SecretBits]> {
+        // Write SecretBit to share files
+        for limb in &t.pattern.0 {
+            for b in 0..64 {
+                let bit = (1 << b) & limb != 0;
+
+                // Compute shares
+                let mut sum: u16 = 0;
+                for output in &mut outputs[1..] {
+                    let element: u16 = rng.gen();
+                    sum += element;
+                    output.write_all(&element.to_le_bytes())?;
+                }
+                sum = sum.wrapping_neg().wrapping_add(if bit { 1 } else { 0 });
+                outputs[0].write_all(&sum.to_le_bytes())?;
+            }
+        }
+    }
+
+    pub fn as_bytes(&self) -> &[u8] {
+        cast_slice(self.0.as_slice())
+    }
+
+    fn random()
 }
 
 pub struct SecretTemplate {
