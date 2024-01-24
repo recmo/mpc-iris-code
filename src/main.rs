@@ -1,20 +1,25 @@
 mod json_stream;
 
 use crate::json_stream::iter_json_array;
-use anyhow::{Context, Error, Result};
+use anyhow::{format_err, Context, Error, Result};
+use bytemuck::{bytes_of, bytes_of_mut, try_cast_slice};
 use clap::{Args, Parser, Subcommand};
 use clap_num::si_number;
 use indicatif::{
     HumanBytes, HumanCount, ParallelProgressIterator, ProgressBar, ProgressBarIter,
     ProgressIterator, ProgressStyle,
 };
-use mpc_iris_code::{SecretBits, Template};
+use memmap::MmapOptions;
+use mpc_iris_code::{distances, preprocess, SecretBits, Template};
 use rand::{thread_rng, Rng};
 use rayon::iter::{IntoParallelIterator, ParallelIterator as _};
 use std::{
     cmp::min,
+    fmt::format,
     fs::{File, OpenOptions},
-    io::{BufReader, BufWriter, Write},
+    io::{BufReader, BufWriter, Read, Write},
+    mem::size_of,
+    net::{SocketAddr, TcpListener},
     os::unix::fs::MetadataExt,
     path::PathBuf,
     sync::Mutex,
@@ -44,7 +49,8 @@ enum Commands {
     Coordinator,
 
     /// Start party member
-    Participant,
+    #[command(arg_required_else_help = true)]
+    Participant(ParticipantArgs),
 }
 
 #[derive(Debug, Args)]
@@ -73,6 +79,16 @@ struct PrepareArgs {
     /// Base file name for output.
     #[arg(default_value = "mpc")]
     output: PathBuf,
+}
+
+#[derive(Debug, Args)]
+struct ParticipantArgs {
+    /// Input share file
+    input: PathBuf,
+
+    /// Socket to listen on
+    #[arg(default_value = "127.0.0.1:1234")]
+    bind: SocketAddr,
 }
 
 fn main() -> Result<()> {
@@ -171,19 +187,63 @@ fn main() -> Result<()> {
                 let t = t?;
 
                 // Write mask bits to main file
-                main.write_all(t.mask.as_bytes())?;
+                main.write_all(bytes_of(&t.mask))?;
+
+                // TODO: Make sure pattern bits are zero where covered by mask.
 
                 // Compute secret shares
                 let shares = SecretBits::from_bits(&t.pattern, args.count);
 
                 // Write SecretBit to share files
                 for (share, file) in shares.iter().zip(outputs.iter_mut()) {
-                    file.write_all(share.as_bytes())?;
+                    file.write_all(bytes_of(share))?;
                 }
 
                 count += 1;
             }
             eprintln!("Processed {} templates", HumanCount(count));
+        }
+        Commands::Participant(args) => {
+            // Read share
+            let file = File::open(&args.input)
+                .with_context(|| format!("Failed to open share at {:?}", args.input))?;
+            let size = HumanBytes(file.metadata()?.size());
+            let mmap = unsafe { MmapOptions::new().map(&file)? };
+            let patterns: &[SecretBits] = try_cast_slice(&mmap)
+                .map_err(|_| format_err!("Share file {:?} invalid.", args.input))?;
+            eprintln!(
+                "Opened share {:?} with {} encrypted patterns ({})",
+                args.input,
+                HumanCount(patterns.len() as u64),
+                size
+            );
+
+            // Open socket
+            let listener = TcpListener::bind(args.bind)
+                .with_context(|| format!("Could not bind to socket {}", args.bind))?;
+            eprintln!("Listening on {}", listener.local_addr()?);
+
+            // Listen for requests
+            for stream in listener.incoming() {
+                eprintln!("Socket opened.");
+                let mut stream = stream?;
+
+                // Read request
+                let mut template = Template::default();
+                stream.read_exact(bytes_of_mut(&mut template))?;
+                eprintln!("Request received.");
+
+                // Preprocess
+                let preprocessed = preprocess(&template);
+
+                // Stream output
+                let mut buf = BufWriter::new(stream);
+                for pattern in patterns {
+                    // Compute encrypted distances of all rotations.
+                    let distances: [u16; 31] = distances(&preprocessed, pattern);
+                    buf.write_all(bytes_of(&distances))?;
+                }
+            }
         }
         _ => todo!(),
     }
