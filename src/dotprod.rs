@@ -14,16 +14,16 @@ pub mod benches {
     use core::hint::black_box;
     use criterion::Criterion;
     use rand::{thread_rng, Rng};
-    use std::{mem::size_of, array};
+    use std::{array, mem::size_of};
 
     pub fn group(c: &mut Criterion) {
         let mut rng = thread_rng();
 
         // Generate 31 query template
-        let queries: Box<[[u16;N]]> = (0..31).map(|_| array::from_fn(|_| rng.gen())).collect();
+        let queries: Box<[[u16; N]]> = (0..31).map(|_| array::from_fn(|_| rng.gen())).collect();
 
         // Generate 1000 reference templates (database)
-        let db: Box<[[u16;N]]> = (0..1000).map(|_| array::from_fn(|_| rng.gen())).collect();
+        let db: Box<[[u16; N]]> = (0..1000).map(|_| array::from_fn(|_| rng.gen())).collect();
 
         c.bench_function("Bench dotref (1x31x1000)", |b| {
             b.iter(|| {

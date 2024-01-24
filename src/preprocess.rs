@@ -1,9 +1,13 @@
 use crate::{SecretTemplate, Template};
 use core::arch::aarch64::{
-    uint16x8_t, uint16x8x4_t, vaddq_u16, vaddvq_u16, vandq_u16, vbicq_u16, vdupq_n_u16,
-    vextq_u16,  vld1q_u16, vld1q_u16_x4, vsubq_u16, vtstq_u16,
+    uint16x8_t, uint16x8x4_t, vaddq_u16, vaddvq_u16, vandq_u16, vbicq_u16, vdupq_n_u16, vextq_u16,
+    vld1q_u16, vld1q_u16_x4, vsubq_u16, vtstq_u16,
 };
-use std::{ops::AddAssign, arch::aarch64::{vmla_u16, vmulq_u16, vmlaq_u16}, hint::black_box};
+use std::{
+    arch::aarch64::{vmla_u16, vmlaq_u16, vmulq_u16},
+    hint::black_box,
+    ops::AddAssign,
+};
 
 /// A SIMD block is 4x8 elements of pattern, premultiplied by mask.
 /// A full template has exactly 400 such blocks.
@@ -54,9 +58,7 @@ impl From<ClearBlock> for Block {
 
 impl From<&CipherBlock> for Block {
     fn from(value: &CipherBlock) -> Self {
-        unsafe {
-            Self(vld1q_u16_x4(value.0.as_ptr()))
-        }
+        unsafe { Self(vld1q_u16_x4(value.0.as_ptr())) }
     }
 }
 
@@ -104,10 +106,10 @@ impl AddAssign for Distance {
 /// block.
 fn block_distance(a: Block, b: Block) -> Distance {
     unsafe {
-        let sum = vmulq_u16(a.0.0, b.0.0);
-        let sum = vmlaq_u16(a.0.1, b.0.1, sum);
-        let sum = vmlaq_u16(a.0.2, b.0.2, sum);
-        let sum = vmlaq_u16(a.0.3, b.0.3, sum);
+        let sum = vmulq_u16(a.0 .0, b.0 .0);
+        let sum = vmlaq_u16(a.0 .1, b.0 .1, sum);
+        let sum = vmlaq_u16(a.0 .2, b.0 .2, sum);
+        let sum = vmlaq_u16(a.0 .3, b.0 .3, sum);
         let sum = vaddvq_u16(sum);
         Distance(sum)
     }
@@ -117,10 +119,10 @@ fn block_distance(a: Block, b: Block) -> Distance {
 fn block_rotate<const N: i32>(a: Block, b: Block) -> Block {
     unsafe {
         Block(uint16x8x4_t(
-            vextq_u16::<N>(a.0.0, b.0.0),
-            vextq_u16::<N>(a.0.1, b.0.1),
-            vextq_u16::<N>(a.0.2, b.0.2),
-            vextq_u16::<N>(a.0.3, b.0.3),
+            vextq_u16::<N>(a.0 .0, b.0 .0),
+            vextq_u16::<N>(a.0 .1, b.0 .1),
+            vextq_u16::<N>(a.0 .2, b.0 .2),
+            vextq_u16::<N>(a.0 .3, b.0 .3),
         ))
     }
 }
