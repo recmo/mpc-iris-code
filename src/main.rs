@@ -8,7 +8,7 @@ use indicatif::{
     HumanBytes, HumanCount, ParallelProgressIterator, ProgressBar, ProgressBarIter,
     ProgressIterator, ProgressStyle,
 };
-use mpc_iris_code::Template;
+use mpc_iris_code::{SecretBits, Template};
 use rand::{thread_rng, Rng};
 use rayon::iter::{IntoParallelIterator, ParallelIterator as _};
 use std::{
@@ -173,21 +173,12 @@ fn main() -> Result<()> {
                 // Write mask bits to main file
                 main.write_all(t.mask.as_bytes())?;
 
-                // Write SecretBit to share files
-                for limb in &t.pattern.0 {
-                    for b in 0..64 {
-                        let bit = (1 << b) & limb != 0;
+                // Compute secret shares
+                let shares = SecretBits::from_bits(&t.pattern, args.count);
 
-                        // Compute shares
-                        let mut sum: u16 = 0;
-                        for output in &mut outputs[1..] {
-                            let element: u16 = rng.gen();
-                            sum += element;
-                            output.write_all(&element.to_le_bytes())?;
-                        }
-                        sum = sum.wrapping_neg().wrapping_add(if bit { 1 } else { 0 });
-                        outputs[0].write_all(&sum.to_le_bytes())?;
-                    }
+                // Write SecretBit to share files
+                for (share, file) in shares.iter().zip(outputs.iter_mut()) {
+                    file.write_all(share.as_bytes())?;
                 }
 
                 count += 1;

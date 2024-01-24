@@ -3,17 +3,25 @@
 pub mod dotprod;
 pub mod preprocess;
 
-use bytemuck::{cast_slice, try_cast_slice, try_cast_slice_mut, Pod, Zeroable};
+use bytemuck::{cast_slice, cast_slice_mut, try_cast_slice, try_cast_slice_mut, Pod, Zeroable};
 use core::arch::aarch64::{
     uint16x8_t, vaddq_u16, vaddvq_u16, vandq_u16, vceqq_u16, vdupq_n_u16, vld1q_u16, vld1q_u16_x4,
 };
 use itertools::izip;
 use rand::{
     distributions::{Distribution, Standard},
-    thread_rng, Rng,
+    thread_rng, Rng, RngCore,
 };
 use serde::{de::Error as _, ser::Error as _, Deserialize, Serialize};
-use std::{arch::aarch64::vst1q_u16, array, fmt::Debug, mem::size_of, process::Output};
+use std::{
+    arch::aarch64::vst1q_u16,
+    array, default,
+    fmt::Debug,
+    iter::{self, repeat},
+    mem::size_of,
+    ops::Index,
+    process::Output,
+};
 
 pub const BITS: usize = 4 * 16 * 200;
 const LIMBS: usize = BITS / 64;
@@ -38,6 +46,20 @@ unsafe impl Pod for Bits {}
 impl Bits {
     pub fn as_bytes(&self) -> &[u8] {
         cast_slice(self.0.as_slice())
+    }
+}
+
+impl Index<usize> for Bits {
+    type Output = bool;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        assert!(index < BITS);
+        let b = self.0[index / 64] & (1 << index % 63) != 0;
+        if b {
+            &true
+        } else {
+            &false
+        }
     }
 }
 
@@ -80,29 +102,41 @@ impl<'de> Deserialize<'de> for Bits {
 
 impl SecretBits {
     pub fn from_bits(bits: &Bits, count: usize) -> Box<[SecretBits]> {
-        // Write SecretBit to share files
-        for limb in &t.pattern.0 {
-            for b in 0..64 {
-                let bit = (1 << b) & limb != 0;
+        assert!(count > 0);
+        let mut rng = thread_rng();
+        let mut result: Box<[SecretBits]> = iter::repeat_with(|| rng.gen::<SecretBits>())
+            .take(count - 1)
+            .chain(iter::once(SecretBits([0_u16; BITS])))
+            .collect();
 
-                // Compute shares
-                let mut sum: u16 = 0;
-                for output in &mut outputs[1..] {
-                    let element: u16 = rng.gen();
-                    sum += element;
-                    output.write_all(&element.to_le_bytes())?;
-                }
-                sum = sum.wrapping_neg().wrapping_add(if bit { 1 } else { 0 });
-                outputs[0].write_all(&sum.to_le_bytes())?;
+        // Make shares sum to zero
+        let (last, rest) = result.split_last_mut().unwrap();
+        for share in rest {
+            for (last, share) in last.0.iter_mut().zip(share.0.iter()) {
+                *last = last.wrapping_sub(*share);
             }
         }
+
+        // Add secret
+        for (i, share) in last.0.iter_mut().enumerate() {
+            let value = if bits[i] { 0 } else { 1 };
+            *share = share.wrapping_add(value);
+        }
+
+        result
     }
 
     pub fn as_bytes(&self) -> &[u8] {
         cast_slice(self.0.as_slice())
     }
+}
 
-    fn random()
+impl Index<usize> for SecretBits {
+    type Output = u16;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        &self.0[index]
+    }
 }
 
 pub struct SecretTemplate {
@@ -112,13 +146,17 @@ pub struct SecretTemplate {
 
 impl Distribution<Bits> for Standard {
     fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> Bits {
-        Bits(array::from_fn(|_| rng.gen()))
+        let mut values = [0_u64; LIMBS];
+        rng.fill_bytes(cast_slice_mut(values.as_mut_slice()));
+        Bits(values)
     }
 }
 
 impl Distribution<SecretBits> for Standard {
     fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> SecretBits {
-        SecretBits(array::from_fn(|_| rng.gen()))
+        let mut values = [0_u16; BITS];
+        rng.fill_bytes(cast_slice_mut(values.as_mut_slice()));
+        SecretBits(values)
     }
 }
 
