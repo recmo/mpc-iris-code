@@ -12,27 +12,27 @@ use std::{
 
 #[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
-pub struct SecretBits(pub [u16; BITS]);
+pub struct EncodedBits(pub [u16; BITS]);
 
-unsafe impl Zeroable for SecretBits {}
+unsafe impl Zeroable for EncodedBits {}
 
-unsafe impl Pod for SecretBits {}
+unsafe impl Pod for EncodedBits {}
 
-impl SecretBits {
+impl EncodedBits {
     /// Generate secret shares from this bitvector.
-    pub fn share(&self, n: usize) -> Box<[SecretBits]> {
+    pub fn share(&self, n: usize) -> Box<[EncodedBits]> {
         assert!(n > 0);
 
         // Create `n - 1` random shares.
         let mut rng = thread_rng();
-        let mut result: Box<[SecretBits]> = iter::repeat_with(|| rng.gen::<SecretBits>())
+        let mut result: Box<[EncodedBits]> = iter::repeat_with(|| rng.gen::<EncodedBits>())
             .take(n - 1)
-            .chain(iter::once(SecretBits([0_u16; BITS])))
+            .chain(iter::once(EncodedBits([0_u16; BITS])))
             .collect();
         let (last, rest) = result.split_last_mut().unwrap();
 
         // Initialize last to sum of self
-        *last = self - rest.iter().sum::<SecretBits>();
+        *last = self - rest.iter().sum::<EncodedBits>();
 
         result
     }
@@ -66,28 +66,28 @@ impl SecretBits {
     }
 }
 
-impl Default for SecretBits {
+impl Default for EncodedBits {
     fn default() -> Self {
         Self([0; BITS])
     }
 }
 
-impl From<&Bits> for SecretBits {
+impl From<&Bits> for EncodedBits {
     fn from(value: &Bits) -> Self {
-        SecretBits(array::from_fn(|i| if value[i] { 1 } else { 0 }))
+        EncodedBits(array::from_fn(|i| if value[i] { 1 } else { 0 }))
     }
 }
 
-impl Distribution<SecretBits> for Standard {
-    fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> SecretBits {
+impl Distribution<EncodedBits> for Standard {
+    fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> EncodedBits {
         let mut values = [0_u16; BITS];
         rng.fill_bytes(cast_slice_mut(values.as_mut_slice()));
-        SecretBits(values)
+        EncodedBits(values)
     }
 }
 
-impl ops::Neg for SecretBits {
-    type Output = SecretBits;
+impl ops::Neg for EncodedBits {
+    type Output = EncodedBits;
 
     fn neg(mut self) -> Self::Output {
         for r in self.0.iter_mut() {
@@ -97,8 +97,8 @@ impl ops::Neg for SecretBits {
     }
 }
 
-impl ops::Neg for &SecretBits {
-    type Output = SecretBits;
+impl ops::Neg for &EncodedBits {
+    type Output = EncodedBits;
 
     fn neg(self) -> Self::Output {
         let mut result = *self;
@@ -109,7 +109,7 @@ impl ops::Neg for &SecretBits {
     }
 }
 
-impl<'a> Sum<&'a SecretBits> for SecretBits {
+impl<'a> Sum<&'a EncodedBits> for EncodedBits {
     fn sum<I: Iterator<Item = &'a Self>>(iter: I) -> Self {
         let mut result = Self::default();
         for i in iter {
@@ -119,10 +119,10 @@ impl<'a> Sum<&'a SecretBits> for SecretBits {
     }
 }
 
-impl ops::Sub<SecretBits> for &SecretBits {
-    type Output = SecretBits;
+impl ops::Sub<EncodedBits> for &EncodedBits {
+    type Output = EncodedBits;
 
-    fn sub(self, mut rhs: SecretBits) -> Self::Output {
+    fn sub(self, mut rhs: EncodedBits) -> Self::Output {
         for (a, &b) in rhs.0.iter_mut().zip(self.0.iter()) {
             *a = b.wrapping_sub(*a);
         }
@@ -130,17 +130,17 @@ impl ops::Sub<SecretBits> for &SecretBits {
     }
 }
 
-impl ops::Sub<&SecretBits> for SecretBits {
-    type Output = SecretBits;
+impl ops::Sub<&EncodedBits> for EncodedBits {
+    type Output = EncodedBits;
 
-    fn sub(mut self, rhs: &SecretBits) -> Self::Output {
+    fn sub(mut self, rhs: &EncodedBits) -> Self::Output {
         self -= rhs;
         self
     }
 }
 
-impl ops::Mul for &SecretBits {
-    type Output = SecretBits;
+impl ops::Mul for &EncodedBits {
+    type Output = EncodedBits;
 
     fn mul(self, rhs: Self) -> Self::Output {
         let mut copy = *self;
@@ -149,33 +149,33 @@ impl ops::Mul for &SecretBits {
     }
 }
 
-impl ops::Mul<&SecretBits> for SecretBits {
-    type Output = SecretBits;
+impl ops::Mul<&EncodedBits> for EncodedBits {
+    type Output = EncodedBits;
 
-    fn mul(mut self, rhs: &SecretBits) -> Self::Output {
+    fn mul(mut self, rhs: &EncodedBits) -> Self::Output {
         self.mul_assign(rhs);
         self
     }
 }
 
-impl ops::AddAssign<&SecretBits> for SecretBits {
-    fn add_assign(&mut self, rhs: &SecretBits) {
+impl ops::AddAssign<&EncodedBits> for EncodedBits {
+    fn add_assign(&mut self, rhs: &EncodedBits) {
         for (s, &r) in self.0.iter_mut().zip(rhs.0.iter()) {
             *s = s.wrapping_add(r);
         }
     }
 }
 
-impl ops::SubAssign<&SecretBits> for SecretBits {
-    fn sub_assign(&mut self, rhs: &SecretBits) {
+impl ops::SubAssign<&EncodedBits> for EncodedBits {
+    fn sub_assign(&mut self, rhs: &EncodedBits) {
         for (s, &r) in self.0.iter_mut().zip(rhs.0.iter()) {
             *s = s.wrapping_sub(r);
         }
     }
 }
 
-impl ops::MulAssign<&SecretBits> for SecretBits {
-    fn mul_assign(&mut self, rhs: &SecretBits) {
+impl ops::MulAssign<&EncodedBits> for EncodedBits {
+    fn mul_assign(&mut self, rhs: &EncodedBits) {
         for (s, &r) in self.0.iter_mut().zip(rhs.0.iter()) {
             *s = s.wrapping_mul(r);
         }
@@ -191,7 +191,7 @@ mod tests {
         let mut rng = thread_rng();
 
         for _ in 0..100 {
-            let secret: SecretBits = rng.gen();
+            let secret: EncodedBits = rng.gen();
             for amount in -15..=15 {
                 assert_eq!(
                     secret.rotated(amount).rotated(-amount),
@@ -204,7 +204,7 @@ mod tests {
 
     #[test]
     fn test_rotated_number() {
-        let secret = SecretBits(array::from_fn(|i| {
+        let secret = EncodedBits(array::from_fn(|i| {
             let (row, col) = (i / COLS, i % COLS);
             (row << 8 | col) as u16
         }));
@@ -224,10 +224,10 @@ mod tests {
 
         for _ in 0..100 {
             let bits: Bits = rng.gen();
-            let secret = SecretBits::from(&bits);
+            let secret = EncodedBits::from(&bits);
             for amount in -15..=15 {
                 assert_eq!(
-                    SecretBits::from(&bits.rotated(amount)),
+                    EncodedBits::from(&bits.rotated(amount)),
                     secret.rotated(amount),
                     "Rotation equivalence failed for {amount}"
                 )

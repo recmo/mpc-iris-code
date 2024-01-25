@@ -1,28 +1,29 @@
 mod bits;
-mod secret_bits;
+mod encoded_bits;
 mod template;
 
-pub use crate::{bits::Bits, secret_bits::SecretBits, template::Template};
+pub use crate::{bits::Bits, encoded_bits::EncodedBits, template::Template};
 
 pub const COLS: usize = 200;
 pub const ROWS: usize = 4 * 16;
 pub const BITS: usize = ROWS * COLS;
 
-/// Generate a [`SecretBits`] such that values are $\{-1,0,1\}$, representing
+/// Generate a [`EncodedBits`] such that values are $\{-1,0,1\}$, representing
 /// unset, masked and set.
-pub fn preprocess(template: &Template) -> SecretBits {
+pub fn encode(template: &Template) -> EncodedBits {
     // Make sure masked-out pattern bits are zero;
     let pattern = &template.pattern & &template.mask;
 
     // Convert to u16s
-    let pattern = SecretBits::from(&pattern);
-    let mask = SecretBits::from(&template.mask);
+    let pattern = EncodedBits::from(&pattern);
+    let mask = EncodedBits::from(&template.mask);
 
     // Preprocessed is (mask - 2 * pattern)
     mask - &pattern - &pattern
 }
 
-pub fn distances(preprocessed: &SecretBits, pattern: &SecretBits) -> [u16; 31] {
+/// Compute encoded distances for each rotation.
+pub fn distances(preprocessed: &EncodedBits, pattern: &EncodedBits) -> [u16; 31] {
     let mut result = [0_u16; 31];
     for (d, r) in result.iter_mut().zip(-15..=15) {
         *d = (preprocessed.rotated(r) * pattern).sum();
@@ -39,10 +40,23 @@ pub fn denominators(a: &Bits, b: &Bits) -> [u16; 31] {
     result
 }
 
+/// Decode a distances. Takes the minimum over the rotations
+pub fn decode_distance(distances: &[u16; 31], denominators: &[u16; 31]) -> f64 {
+    // TODO: Detect errors.
+    //
+
+    distances
+        .iter()
+        .zip(denominators.iter())
+        .map(|(&n, &d)| (d.wrapping_sub(n) / 2, d))
+        .map(|(n, d)| (n as f64) / (d as f64))
+        .fold(f64::INFINITY, f64::min)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{denominators, preprocess, template::tests::test_data};
+    use crate::{denominators, encode, template::tests::test_data};
     use float_eq::assert_float_eq;
     use proptest::bits::u16;
     use rand::{thread_rng, Rng};
@@ -52,7 +66,7 @@ mod tests {
         let mut rng = thread_rng();
         for _ in 0..100 {
             let entry = rng.gen();
-            let encrypted = preprocess(&entry);
+            let encrypted = encode(&entry);
             for (i, v) in encrypted.0.iter().enumerate() {
                 match *v {
                     u16::MAX => assert!(entry.mask[i] && entry.pattern[i]),
@@ -70,8 +84,8 @@ mod tests {
         for _ in 0..100 {
             let a = rng.gen();
             let b = rng.gen();
-            let pre_a = preprocess(&a);
-            let pre_b = preprocess(&b);
+            let pre_a = encode(&a);
+            let pre_b = encode(&b);
 
             let mut equal = 0;
             let mut uneq = 0;
@@ -103,7 +117,7 @@ mod tests {
             let query = &data[d.left];
             let entry = &data[d.right];
 
-            let encrypted = preprocess(&entry);
+            let encrypted = encode(&entry);
             for (i, v) in encrypted.0.iter().enumerate() {
                 match *v {
                     u16::MAX => assert!(entry.mask[i] && entry.pattern[i]),
@@ -114,17 +128,12 @@ mod tests {
             }
 
             // Encode entry
-            let preprocessed = preprocess(&query);
+            let preprocessed = encode(&query);
             let distances = distances(&preprocessed, &encrypted);
             let denominators = denominators(&query.mask, &entry.mask);
 
             // Measure encoded distance
-            let actual = distances
-                .iter()
-                .zip(denominators.iter())
-                .map(|(&n, &d)| (d.wrapping_sub(n) / 2, d))
-                .map(|(n, d)| (n as f64) / (d as f64))
-                .fold(f64::INFINITY, f64::min);
+            let actual = decode_distance(&distances, &denominators);
 
             assert_float_eq!(actual, expected, ulps <= 1);
         }
