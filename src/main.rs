@@ -89,7 +89,7 @@ fn main() -> Result<()> {
     let args = Cli::parse();
 
     let byte_style = ProgressStyle::with_template(
-        "{wide_bar} {bytes}/{total_bytes} {bytes_per_sec} {elapsed}/{duration}",
+        "{wide_bar} {bytes}/{total_bytes} {bytes_per_sec} {elapsed}/{duration} ",
     )?;
 
     match args.command {

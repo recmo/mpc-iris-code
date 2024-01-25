@@ -74,30 +74,34 @@ impl Distribution<Template> for Standard {
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use super::*;
     use float_eq::assert_float_eq;
     use std::fs::File;
 
-    #[test]
-    #[ignore] // Requires test data
-    fn test_distance_ref() {
-        #[derive(Deserialize)]
-        struct Distance {
-            left:     usize,
-            right:    usize,
-            distance: f64,
-        };
+    #[derive(Deserialize)]
+    pub struct Distance {
+        pub left:     usize,
+        pub right:    usize,
+        pub distance: f64,
+    }
 
-        // Read templates
+    pub fn test_data() -> (Vec<Template>, Vec<Distance>) {
         let file = File::open("data/templates.json").unwrap();
         let data: Vec<Template> = serde_json::from_reader(file).unwrap();
         assert_eq!(data.len(), 2092);
 
-        // Read distances
         let file = File::open("data/distances.json").unwrap();
         let distances: Vec<Distance> = serde_json::from_reader(file).unwrap();
         assert_eq!(distances.len(), 1000);
+
+        (data, distances)
+    }
+
+    #[test]
+    // #[ignore] // Requires test data
+    fn test_distance_ref() {
+        let (data, distances) = test_data();
 
         // Check distances to within 10 ulp
         for d in distances {
