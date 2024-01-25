@@ -4,11 +4,18 @@ pub fn distances<'a>(
     query: &'a EncodedBits,
     db: &'a [EncodedBits],
 ) -> impl Iterator<Item = [u16; 31]> + 'a {
-    db.iter().map(|entry| {
+    // Prepare 31 rotations of query
+    let rotations: Box<[EncodedBits]> = (-15..=15).map(|r| query.rotated(r)).collect();
+
+    // Iterate over database entries
+    db.iter().map(move |entry| {
         let mut result = [0_u16; 31];
-        for (d, r) in result.iter_mut().zip(-15..=15) {
-            *d = (query.rotated(r) * entry).sum();
+
+        // Compute dot product
+        for (d, rotation) in result.iter_mut().zip(rotations.iter()) {
+            *d = rotation.dot(&entry);
         }
+
         result
     })
 }
