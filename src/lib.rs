@@ -23,13 +23,17 @@ pub fn encode(template: &Template) -> EncodedBits {
     mask - &pattern - &pattern
 }
 
+/// Compute encoded distances for each rotation, iterating over a database
+pub fn distances<'a>(
+    query: &'a EncodedBits,
+    db: &'a [EncodedBits],
+) -> impl Iterator<Item = [u16; 31]> + 'a {
+    arch::distances(query, db)
+}
+
 /// Compute the 31 rotated mask popcounts.
-pub fn denominators(a: &Bits, b: &Bits) -> [u16; 31] {
-    let mut result = [0_u16; 31];
-    for (d, r) in result.iter_mut().zip(-15..=15) {
-        *d = (a.rotated(r) & b).count_ones();
-    }
-    result
+pub fn denominators<'a>(query: &'a Bits, db: &'a [Bits]) -> impl Iterator<Item = [u16; 31]> + 'a {
+    arch::denominators(query, db)
 }
 
 /// Decode a distances. Takes the minimum over the rotations
@@ -43,14 +47,6 @@ pub fn decode_distance(distances: &[u16; 31], denominators: &[u16; 31]) -> f64 {
         .map(|(&n, &d)| (d.wrapping_sub(n) / 2, d))
         .map(|(n, d)| (n as f64) / (d as f64))
         .fold(f64::INFINITY, f64::min)
-}
-
-/// Compute encoded distances for each rotation, iterating over a database
-pub fn distances<'a>(
-    query: &'a EncodedBits,
-    db: &'a [EncodedBits],
-) -> impl Iterator<Item = [u16; 31]> + 'a {
-    arch::distances(query, db)
 }
 
 #[cfg(test)]

@@ -62,7 +62,11 @@ impl EncodedBits {
     }
 
     pub fn dot(&self, other: &Self) -> u16 {
-        (self * other).sum()
+        self.0
+            .iter()
+            .zip(other.0.iter())
+            .map(|(&a, &b)| u16::wrapping_mul(a, b))
+            .fold(0_u16, u16::wrapping_add)
     }
 }
 

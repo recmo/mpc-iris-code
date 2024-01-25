@@ -5,7 +5,7 @@ use anyhow::{format_err, Context, Error, Result};
 use bytemuck::{bytes_of, bytes_of_mut, try_cast_slice};
 use clap::{Args, Parser, Subcommand};
 use clap_num::si_number;
-use indicatif::{HumanBytes, HumanCount, ProgressBar, ProgressIterator, ProgressStyle};
+use indicatif::{HumanBytes, HumanCount, ProgressBar, ProgressStyle};
 use memmap::MmapOptions;
 use mpc_iris_code::{
     decode_distance, denominators, distances, encode, Bits, EncodedBits, Template,
@@ -254,10 +254,13 @@ fn main() -> Result<()> {
                 let progress_bar =
                     ProgressBar::new(patterns.len() as u64).with_style(count_style.clone());
                 let mut buf = BufWriter::new(stream);
-                for distances in results {
-                    progress_bar.inc(1);
+                for (i, distances) in results.enumerate() {
+                    if i % 1024 == 0 {
+                        progress_bar.inc(1024);
+                    }
                     buf.write_all(bytes_of(&distances))?;
                 }
+                progress_bar.finish();
                 eprintln!("Reply sent.");
             }
         }
@@ -300,19 +303,20 @@ fn main() -> Result<()> {
                     })
                     .collect::<Result<_, _>>()?;
 
+                // Prepare local computation of denominators
+                let denominators = denominators(&query.mask, masks);
+
                 // Keep track of min distance entry.
                 let mut min_distance = f64::INFINITY;
                 let mut min_index = usize::MAX;
 
                 // Process results
-                for (i, mask) in masks
-                    .iter()
-                    .enumerate()
-                    .progress()
-                    .with_style(count_style.clone())
-                {
-                    // Compute denominators locally
-                    let denominators = denominators(&query.mask, mask);
+                let progress_bar =
+                    ProgressBar::new(masks.len() as u64).with_style(count_style.clone());
+                for (i, denominators) in denominators.enumerate() {
+                    if i % 1024 == 0 {
+                        progress_bar.inc(1024);
+                    }
 
                     // Fetch and combine distance shares from participants
                     let mut distances = [0_u16; 31];
@@ -342,6 +346,7 @@ fn main() -> Result<()> {
                         min_distance = distance;
                     }
                 }
+                progress_bar.finish();
 
                 eprintln!("Found closest entry at {min_index} distance {min_distance}");
             }

@@ -2,7 +2,7 @@ mod generic; // Optimized generic implementation
 mod neon; // Optimized aarch64 NEON implementation
 mod reference; // Simple generic implementations
 
-pub use generic::distances;
+pub use generic::{denominators, distances};
 
 #[cfg(feature = "bench")]
 pub mod benches {

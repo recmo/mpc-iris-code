@@ -31,6 +31,14 @@ impl Bits {
     pub fn count_ones(&self) -> u16 {
         self.0.iter().map(|n| n.count_ones() as u16).sum()
     }
+
+    pub fn dot(&self, other: &Self) -> u16 {
+        self.0
+            .iter()
+            .zip(other.0.iter())
+            .map(|(&a, &b)| (a & b).count_ones() as u16)
+            .sum()
+    }
 }
 
 unsafe impl Zeroable for Bits {}
