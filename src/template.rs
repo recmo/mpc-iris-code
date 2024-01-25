@@ -111,23 +111,3 @@ pub mod tests {
         }
     }
 }
-
-#[cfg(feature = "bench")]
-pub mod benches {
-    use super::*;
-    use core::hint::black_box;
-    use criterion::Criterion;
-
-    pub fn group(c: &mut Criterion) {
-        let mut rng = thread_rng();
-
-        // Generate 31 query templates (rotations)
-        let queries: Box<[Template]> = (0..31).map(|_| rng.gen()).collect();
-
-        // Generate 1000 reference templates (database)
-        let db: Box<[SecretTemplate]> = (0..1000).map(|_| rng.gen()).collect();
-
-        preprocess::benches::group(c);
-        dotprod::benches::group(c);
-    }
-}

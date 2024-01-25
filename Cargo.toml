@@ -36,6 +36,7 @@ opt-level = 3
 lto = "fat"
 
 # samply record --rate 10000 -- cargo bench --profile profiling --bench bench --features bench -- --profile-time 60 distance4
+# samply record -- cargo run  --profile profiling -- participant ./mpc.share-0
 [profile.profiling]
 inherits = "release"
 debug = true

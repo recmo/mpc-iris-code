@@ -15,7 +15,7 @@ use rayon::iter::{IntoParallelIterator, ParallelIterator as _};
 use std::{
     fs::{File, OpenOptions},
     io::{BufReader, BufWriter, Read, Write},
-    net::{Shutdown, SocketAddr, TcpListener, TcpStream},
+    net::{SocketAddr, TcpListener, TcpStream},
     os::unix::fs::MetadataExt,
     path::PathBuf,
     sync::Mutex,
@@ -247,13 +247,15 @@ fn main() -> Result<()> {
                 eprintln!("Request received.");
 
                 // Preprocess
-                let preprocessed = encode(&template);
+                let query = encode(&template);
+                let results = distances(&query, &patterns);
 
                 // Stream output
+                let progress_bar =
+                    ProgressBar::new(patterns.len() as u64).with_style(count_style.clone());
                 let mut buf = BufWriter::new(stream);
-                for pattern in patterns.iter().progress().with_style(count_style.clone()) {
-                    // Compute encrypted distances of all rotations.
-                    let distances: [u16; 31] = distances(&preprocessed, pattern);
+                for distances in results {
+                    progress_bar.inc(1);
                     buf.write_all(bytes_of(&distances))?;
                 }
                 eprintln!("Reply sent.");

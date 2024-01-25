@@ -1,3 +1,4 @@
+mod arch;
 mod bits;
 mod encoded_bits;
 mod template;
@@ -22,15 +23,6 @@ pub fn encode(template: &Template) -> EncodedBits {
     mask - &pattern - &pattern
 }
 
-/// Compute encoded distances for each rotation.
-pub fn distances(preprocessed: &EncodedBits, pattern: &EncodedBits) -> [u16; 31] {
-    let mut result = [0_u16; 31];
-    for (d, r) in result.iter_mut().zip(-15..=15) {
-        *d = (preprocessed.rotated(r) * pattern).sum();
-    }
-    result
-}
-
 /// Compute the 31 rotated mask popcounts.
 pub fn denominators(a: &Bits, b: &Bits) -> [u16; 31] {
     let mut result = [0_u16; 31];
@@ -43,7 +35,7 @@ pub fn denominators(a: &Bits, b: &Bits) -> [u16; 31] {
 /// Decode a distances. Takes the minimum over the rotations
 pub fn decode_distance(distances: &[u16; 31], denominators: &[u16; 31]) -> f64 {
     // TODO: Detect errors.
-    //
+    // (d - n) must be an even number in range
 
     distances
         .iter()
@@ -51,6 +43,14 @@ pub fn decode_distance(distances: &[u16; 31], denominators: &[u16; 31]) -> f64 {
         .map(|(&n, &d)| (d.wrapping_sub(n) / 2, d))
         .map(|(n, d)| (n as f64) / (d as f64))
         .fold(f64::INFINITY, f64::min)
+}
+
+/// Compute encoded distances for each rotation, iterating over a database
+pub fn distances<'a>(
+    query: &'a EncodedBits,
+    db: &'a [EncodedBits],
+) -> impl Iterator<Item = [u16; 31]> + 'a {
+    arch::distances(query, db)
 }
 
 #[cfg(test)]
@@ -129,7 +129,7 @@ mod tests {
 
             // Encode entry
             let preprocessed = encode(&query);
-            let distances = distances(&preprocessed, &encrypted);
+            let distances = distances(&preprocessed, &[encrypted]).next().unwrap();
             let denominators = denominators(&query.mask, &entry.mask);
 
             // Measure encoded distance
@@ -143,16 +143,9 @@ mod tests {
 #[cfg(feature = "bench")]
 pub mod benches {
     use super::*;
-    use core::hint::black_box;
     use criterion::Criterion;
 
     pub fn group(c: &mut Criterion) {
-        let mut rng = thread_rng();
-
-        // Generate 31 query templates (rotations)
-        let queries: Box<[Template]> = (0..31).map(|_| rng.gen()).collect();
-
-        // Generate 1000 reference templates (database)
-        let db: Box<[SecretTemplate]> = (0..1000).map(|_| rng.gen()).collect();
+        arch::benches::group(c);
     }
 }
