@@ -1,6 +1,7 @@
 #![allow(unused)]
 use crate::{Bits, EncodedBits};
 use rayon::prelude::*;
+use std::{cmp::min, mem::swap, thread::JoinHandle};
 
 pub fn distances<'a>(
     query: &'a EncodedBits,

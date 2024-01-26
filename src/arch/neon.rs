@@ -1,6 +1,8 @@
 #![cfg(target_feature = "neon")]
 #![allow(unused)]
 
+// Rust + LLVM already generates good NEON code for the generic implementation.
+
 #[cfg(feature = "bench")]
 pub mod benches {
     use super::*;
