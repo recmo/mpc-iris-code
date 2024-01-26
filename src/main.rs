@@ -1,7 +1,7 @@
 mod json_stream;
 
 use crate::json_stream::iter_json_array;
-use anyhow::{format_err, Context, Error, Result};
+use anyhow::{format_err, Context, Error, Ok, Result};
 use bytemuck::{bytes_of, bytes_of_mut, try_cast_slice};
 use clap::{Args, Parser, Subcommand};
 use clap_num::si_number;
@@ -15,11 +15,17 @@ use mpc_iris_code::{
 use rand::{thread_rng, Rng};
 use rayon::{
     current_num_threads,
-    iter::{IntoParallelIterator, ParallelIterator as _},
+    iter::{
+        IndexedParallelIterator, IntoParallelIterator, IntoParallelRefIterator,
+        ParallelIterator as _,
+    },
+    prelude::*,
     result, ThreadPoolBuilder,
 };
 use std::{
     cmp::min,
+    io::Write,
+    mem::{size_of, swap},
     net::{SocketAddr, TcpListener, TcpStream},
     os::unix::fs::MetadataExt,
     path::PathBuf,
@@ -34,8 +40,8 @@ use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader, BufWriter},
     sync::mpsc,
     task::spawn_blocking,
+    try_join,
 };
-use tokio_stream::wrappers::ReceiverStream;
 
 /// Search for a pattern in a file and display the lines that contain it.
 #[derive(Parser)]
@@ -187,7 +193,7 @@ async fn main() -> Result<()> {
             const BATCH_SIZE: usize = 100;
             let channel_capacity = 2 * available_parallelism()?.get();
             let (sender, mut receiver) = mpsc::channel(channel_capacity);
-            tokio::task::spawn_blocking(move || {
+            let producer_task = tokio::task::spawn_blocking(move || {
                 let remaining = AtomicUsize::new(args.count.saturating_sub(1));
                 let remaining_ref = &remaining;
                 rayon::scope(|scope| {
@@ -215,7 +221,9 @@ async fn main() -> Result<()> {
                             sender.blocking_send(buf).expect("Channel failed.");
                         }
                     });
-                })
+                });
+                // TODO: Capture errors from rayon::scope.
+                Ok(())
             });
 
             // Sink the channel to file.
@@ -223,118 +231,129 @@ async fn main() -> Result<()> {
                 buffer.write_all(&buf).await?;
                 progress.inc(buf.len() as u64);
             }
+            progress.finish(); // TODO: Abandon on error
+
+            // Finalize producer task
+            producer_task.await??;
 
             // Finalize the file
             buffer.write_all(b"]\n").await?;
             buffer.flush().await?;
         }
-        // Commands::Prepare(args) => {
-        //     // Open input stream
-        //     let templates = {
-        //         let file = File::open(&args.input)
-        //             .await
-        //             .with_context(|| format!("Failed to open file at {:?}", args.input))?;
-        //         let size = HumanBytes(file.metadata()?.size());
-        //         let count = HumanCount(size.0 / 6434);
-        //         eprintln!(
-        //             "Input file {:?} ({size}, estimated {count} templates)",
-        //             args.input
-        //         );
-        //         eprintln!(
-        //             "Estimates size of share: {}",
-        //             HumanBytes(count.0 * 2 * mpc_iris_code::BITS as u64)
-        //         );
-        //         let progress = ProgressBar::new(size.0)
-        //             .with_style(byte_style)
-        //             .wrap_read(file);
-        //         let input = BufReader::new(progress);
-        //         iter_json_array::<Template, _>(input)
-        //     };
+        Commands::Prepare(args) => {
+            // Open input file (synchronous IO for Serde)
+            let file = std::fs::File::open(&args.input)
+                .with_context(|| format!("Failed to open file at {:?}", args.input))?;
+            let size = HumanBytes(file.metadata()?.size());
+            let count = HumanCount(size.0 / 6434);
+            eprintln!(
+                "Input file {:?} ({size}, estimated {count} templates)",
+                args.input
+            );
+            let total_size = HumanBytes(
+                count.0 * (size_of::<Bits>() as u64)
+                    + count.0 * (args.count as u64) * (size_of::<EncodedBits>() as u64),
+            );
+            eprintln!("Estimated total size of shares: {total_size}",);
+            let input = std::io::BufReader::new(file);
 
-        //     // Generate output files
-        //     eprintln!(
-        //         "Output {:?} {:?}",
-        //         args.output.with_extension("main"),
-        //         args.output.with_extension("share-n")
-        //     );
-        //     let mut main = BufWriter::new(File::create(args.output.with_extension("main"))?);
-        //     let mut outputs: Box<[_]> = (0..args.count)
-        //         .map(|i| {
-        //             File::create(args.output.with_extension(format!("share-{i}")))
-        //                 .map(BufWriter::new)
-        //         })
-        //         .collect::<Result<_, _>>()?;
+            // Pipeline
+            // A reader thread parsing the JSON into Vec<Template>'s
+            // A processing thread computing shares as (Vec<u8>, Vec<Vec<u8>>)
+            // A writer thread writing buffers to the files.
 
-        //     // Process templates
-        //     let mut count = 0;
-        //     for t in templates {
-        //         let t = t?;
+            // Note: if we are clever about random number generation only the main and one
+            // share thread needs to see the templates.
 
-        //         // Write mask bits to main file
-        //         main.write_all(bytes_of(&t.mask))?;
+            // Generate output files
+            eprintln!(
+                "Output {:?} {:?}",
+                args.output.with_extension("main"),
+                args.output.with_extension("share-n")
+            );
+            let mut main = File::create(args.output.with_extension("main"))
+                .await
+                .map(BufWriter::new)?;
+            let mut outputs = Vec::new();
+            for i in 0..args.count {
+                outputs.push(
+                    File::create(args.output.with_extension(format!("share-{i}")))
+                        .await
+                        .map(BufWriter::new)?,
+                );
+            }
 
-        //         // Compute secret shares
-        //         let shares = encode(&t).share(args.count);
+            // Read elements sequentially to the channel
+            // Runs at around 20k/s bottle-necked by deserializing hex strings.
+            let (sender, mut templates) = mpsc::channel(4);
+            let reader_task = tokio::task::spawn_blocking(move || {
+                let iter = iter_json_array::<Template, _>(input);
+                let mut buffer = Vec::with_capacity(1000);
+                for template in iter {
+                    buffer.push(template?);
+                    if buffer.len() == buffer.capacity() {
+                        let mut other = Vec::with_capacity(buffer.capacity());
+                        swap(&mut buffer, &mut other);
+                        sender.blocking_send(other)?;
+                    }
+                }
+                if !buffer.is_empty() {
+                    sender.blocking_send(buffer)?;
+                }
+                Ok(())
+            });
 
-        //         // Write SecretBit to share files
-        //         for (share, file) in shares.iter().zip(outputs.iter_mut()) {
-        //             file.write_all(bytes_of(share))?;
-        //         }
+            // Process batches in parallel
+            let (sender, mut buffers) = mpsc::channel(4);
+            let process_task = tokio::task::spawn_blocking(move || {
+                while let Some(templates) = templates.blocking_recv() {
+                    // Compute main buffer and shares in parallel
+                    let mut main = vec![0_u8; templates.len() * size_of::<Bits>()];
+                    let shares = templates
+                        .par_iter()
+                        .zip(main.par_chunks_exact_mut(size_of::<Bits>()))
+                        .map(|(&template, main)| {
+                            main.copy_from_slice(bytes_of(&template.mask));
+                            encode(&template).share(args.count)
+                        })
+                        .collect::<Vec<_>>();
 
-        //         count += 1;
-        //     }
-        //     eprintln!("Processed {} templates", HumanCount(count));
-        // }
-        // Commands::Participant(args) => {
-        //     // Read share
-        //     let file = File::open(&args.input)
-        //         .with_context(|| format!("Failed to open share at {:?}", args.input))?;
-        //     let size = HumanBytes(file.metadata()?.size());
-        //     let mmap = unsafe { MmapOptions::new().map(&file)? };
-        //     let patterns: &[EncodedBits] = try_cast_slice(&mmap)
-        //         .map_err(|_| format_err!("Share file {:?} invalid.", args.input))?;
-        //     eprintln!(
-        //         "Opened share {:?} with {} encrypted patterns ({})",
-        //         args.input,
-        //         HumanCount(patterns.len() as u64),
-        //         size
-        //     );
+                    // Sequentially merge share outputs
+                    // It would be nice if we could write these in place like with the main share.
+                    let mut outputs: Vec<Vec<u8>> =
+                        vec![
+                            Vec::with_capacity(templates.len() * size_of::<EncodedBits>());
+                            args.count
+                        ];
+                    for shares in shares.iter() {
+                        for (output, share) in outputs.iter_mut().zip(shares.iter()) {
+                            output.extend_from_slice(bytes_of(share));
+                        }
+                    }
+                    sender.blocking_send((main, outputs))?;
+                }
+                Ok(())
+            });
 
-        //     // Open socket
-        //     let listener = TcpListener::bind(args.bind)
-        //         .with_context(|| format!("Could not bind to socket {}", args.bind))?;
-        //     eprintln!("Listening on {}", listener.local_addr()?);
+            // Write
+            let progress = ProgressBar::new(total_size.0).with_style(byte_style);
+            while let Some((buf_main, buf_outputs)) = buffers.recv().await {
+                main.write_all(&buf_main).await?;
+                progress.inc(buf_main.len() as u64);
+                for (output, buffer) in outputs.iter_mut().zip(buf_outputs) {
+                    output.write_all(&buffer).await?;
+                    progress.inc(buffer.len() as u64);
+                }
+            }
+            main.flush().await?;
+            for output in &mut outputs {
+                output.flush().await?;
+            }
 
-        //     // Listen for requests
-        //     for stream in listener.incoming() {
-        //         // TODO: Catch errors and panics.
-
-        //         eprintln!("Socket opened.");
-        //         let mut stream = stream?;
-
-        //         // Read request
-        //         let mut template = Template::default();
-        //         stream.read_exact(bytes_of_mut(&mut template))?;
-        //         eprintln!("Request received.");
-
-        //         // Preprocess
-        //         let query = encode(&template);
-        //         let results = distances(&query, &patterns);
-
-        //         // Stream output
-        //         let progress_bar =
-        //             ProgressBar::new(patterns.len() as u64).with_style(count_style.clone());
-        //         let mut buf = BufWriter::new(stream);
-        //         for (i, distances) in results.enumerate() {
-        //             if i % 1024 == 0 {
-        //                 progress_bar.inc(1024);
-        //             }
-        //             buf.write_all(bytes_of(&distances))?;
-        //         }
-        //         progress_bar.finish();
-        //         eprintln!("Reply sent.");
-        //     }
-        // }
+            reader_task.await??;
+            process_task.await??;
+            progress.finish();
+        }
         // Commands::Coordinator(args) => {
         //     // Read main file with masks
         //     let file = File::open(&args.input)
@@ -424,6 +443,60 @@ async fn main() -> Result<()> {
         //         eprintln!("Found closest entry at {min_index} distance {min_distance}");
         //     }
         // }
+        Commands::Participant(args) => {
+            // Read share as memory mapped file.
+            let file = std::fs::File::open(&args.input)
+                .with_context(|| format!("Failed to open share at {:?}", args.input))?;
+            let size = HumanBytes(file.metadata()?.size());
+            let mmap = unsafe { MmapOptions::new().map(&file)? };
+            let patterns: &[EncodedBits] = try_cast_slice(&mmap)
+                .map_err(|_| format_err!("Share file {:?} invalid.", args.input))?;
+            eprintln!(
+                "Opened share {:?} with {} encrypted patterns ({})",
+                args.input,
+                HumanCount(patterns.len() as u64),
+                size
+            );
+
+            // TODO: Sync from database and add to memmapped file.
+
+            // Open socket
+            let listener = TcpListener::bind(args.bind)
+                .with_context(|| format!("Could not bind to socket {}", args.bind))?;
+            eprintln!("Listening on {}", listener.local_addr()?);
+
+            // Listen for requests
+            for stream in listener.incoming() {
+                // TODO: Catch errors and panics.
+
+                eprintln!("Socket opened.");
+                let mut stream = stream?;
+
+                // Read request
+                let mut template = Template::default();
+                std::io::Read::read_exact(&mut stream, bytes_of_mut(&muttemplate))?;
+                eprintln!("Request received.");
+
+                // TODO: Sync from database and add to memmapped file.
+
+                // Preprocess
+                let query = encode(&template);
+                let results = distances(&query, &patterns);
+
+                // Stream output
+                let progress_bar =
+                    ProgressBar::new(patterns.len() as u64).with_style(count_style.clone());
+                let mut buf = BufWriter::new(stream);
+                for (i, distances) in results.enumerate() {
+                    if i % 1024 == 0 {
+                        progress_bar.inc(1024);
+                    }
+                    buf.write_all(bytes_of(&distances))?;
+                }
+                progress_bar.finish();
+                eprintln!("Reply sent.");
+            }
+        }
         _ => todo!(),
     }
     Ok(())
