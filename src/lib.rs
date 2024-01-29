@@ -51,6 +51,33 @@ impl DistanceEngine {
     }
 }
 
+pub struct MasksEngine {
+    rotations: Box<[Bits; 31]>,
+}
+
+impl MasksEngine {
+    pub fn new(query: &Bits) -> Self {
+        let rotations = (-15..=15)
+            .map(|r| query.rotated(r))
+            .collect::<Box<[Bits]>>()
+            .try_into()
+            .unwrap();
+        Self { rotations }
+    }
+
+    pub fn batch_process(&self, out: &mut [[u16; 31]], db: &[Bits]) {
+        assert_eq!(out.len(), db.len());
+        out.par_iter_mut()
+            .zip(db.par_iter())
+            .for_each(|(result, entry)| {
+                // Compute dot product for each rotation
+                for (d, rotation) in result.iter_mut().zip(self.rotations.iter()) {
+                    *d = rotation.dot(entry);
+                }
+            });
+    }
+}
+
 /// Compute encoded distances for each rotation, iterating over a database
 pub fn distances<'a>(
     query: &'a EncodedBits,

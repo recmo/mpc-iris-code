@@ -5,10 +5,12 @@ use anyhow::{format_err, Context, Ok, Result};
 use bytemuck::{bytes_of, bytes_of_mut, cast_slice, cast_slice_mut, try_cast_slice};
 use clap::{Args, Parser, Subcommand};
 use clap_num::si_number;
+use core::num;
+use futures::future::try_join_all;
 use indicatif::{HumanBytes, HumanCount, ProgressBar, ProgressStyle};
 use memmap::MmapOptions;
 use mpc_iris_code::{
-    decode_distance, denominators, encode, Bits, DistanceEngine, EncodedBits, Template,
+    decode_distance, denominators, encode, Bits, DistanceEngine, EncodedBits, MasksEngine, Template,
 };
 use rand::{thread_rng, Rng};
 use rayon::{
@@ -20,7 +22,7 @@ use rayon::{
 use std::{
     cmp::min,
     io::ErrorKind,
-    mem::{size_of, swap},
+    mem::{align_of, size_of, swap},
     net::SocketAddr,
     os::unix::fs::MetadataExt,
     path::PathBuf,
@@ -453,17 +455,22 @@ async fn main() -> Result<(), anyhow::Error> {
 
             eprintln!("Participants: {:?}", &args.participants);
 
+            const BATCH_SIZE: usize = 20_000;
+
             eprintln!("Starting main loop.");
             loop {
-                eprintln!("Generating random request.");
                 // Generate random request.
+                eprintln!("Generating random request.");
                 let query: Template = thread_rng().gen();
 
+                // TODO: Local share.
+                assert!(args.share.is_none());
+
                 // Contact participants
-                // TODO: Async parallel connect
-                eprintln!("Calling participants.");
-                let mut streams = Vec::with_capacity(args.participants.len());
-                for address in args.participants.iter() {
+                eprintln!("Calling participants {:?}", args.participants);
+                let mut streams = try_join_all(args.participants.iter().map(|address| async {
+                    let address = address.clone();
+
                     // Connect to participant
                     let mut stream = TcpStream::connect(address)
                         .await
@@ -476,27 +483,23 @@ async fn main() -> Result<(), anyhow::Error> {
 
                     // Read buffered
                     let stream = BufReader::new(stream);
-                    streams.push(stream);
-                }
 
-                // TODO: Local share.
-                assert!(args.share.is_none());
+                    Ok(stream)
+                }))
+                .await?;
 
                 // Prepare local computation of denominators
                 eprintln!("Locally computing denominators.");
                 let mmap_ref = mmap.clone();
-                let (sender, mut receiver) = mpsc::channel(4);
+                let (sender, mut receiver) = mpsc::channel(4000);
                 let denomoninator_worker = tokio::task::spawn_blocking(move || {
-                    // eprintln!("💠 Accessing masks.");
                     let masks: &[Bits] = cast_slice(&mmap_ref);
-
-                    // eprintln!("💠 Computing denominators.");
-                    let denominators = denominators(&query.mask, masks); // TODO: Batch process.
-                    for denominator in denominators {
-                        // eprintln!("💠 Sending denominator.");
-                        sender.blocking_send(denominator)?;
+                    let engine = MasksEngine::new(&query.mask);
+                    for chunk in masks.chunks(BATCH_SIZE) {
+                        let mut result = vec![[0_u16; 31]; chunk.len()];
+                        engine.batch_process(&mut result, chunk);
+                        sender.blocking_send(result)?;
                     }
-
                     Ok(())
                 });
 
@@ -512,67 +515,73 @@ async fn main() -> Result<(), anyhow::Error> {
                     // Track if we reached the end.
                     let mut finished = false;
 
-                    // Collect shares
-                    // eprintln!("Collect shares.");
+                    // Collect batches of shares
                     let mut shares = Vec::with_capacity(streams.len());
                     for (j, stream) in streams.iter_mut().enumerate() {
-                        let mut share = [0_u16; 31];
-                        if let Err(err) = stream.read_exact(bytes_of_mut(&mut share)).await {
-                            match err.kind() {
-                                ErrorKind::UnexpectedEof => {
-                                    eprintln!("Share {j} ran out at sequence number {i}.");
-                                    finished = true;
+                        let mut batch = vec![[0_u16; 31]; BATCH_SIZE];
+                        let mut buffer: &mut [u8] = cast_slice_mut(batch.as_mut_slice());
+
+                        while !buffer.is_empty() {
+                            let bytes_read = stream.read_buf(&mut buffer).await?;
+                            if bytes_read == 0 {
+                                // End of stream
+                                finished = true;
+                                eprintln!("Participant {j} finished.");
+                                if buffer.len() % size_of::<[u16; 31]>() != 0 {
+                                    eprintln!("Warning: received partial results from {j}.");
                                 }
-                                _ => return Err(err.into()),
-                            };
+                                let n_incomplete = (buffer.len() + size_of::<[u16; 31]>() - 1)
+                                    / size_of::<[u16; 31]>();
+                                batch.truncate(batch.len() - n_incomplete);
+                                break;
+                            }
                         }
-                        shares.push(share);
+                        shares.push(batch);
                     }
 
-                    // Combine shares
-                    // eprintln!("Combine shares.");
-                    let mut distances = [0_u16; 31];
-                    for share in shares {
-                        for (d, &s) in distances.iter_mut().zip(share.iter()) {
-                            *d = d.wrapping_add(s);
-                        }
-                    }
-
-                    // Collect denominator
-                    // eprintln!("Collect denominators.");
+                    // Collect batch of denominator
                     let den = if let Some(den) = receiver.recv().await {
                         den
                     } else {
                         eprintln!("Masks ran out at sequence number {i}.");
                         finished = true;
-                        [0_u16; 31]
+                        Vec::new()
                     };
+
+                    let batch_size = shares.iter().map(|b| b.len()).fold(den.len(), usize::min);
+                    if batch_size < BATCH_SIZE {
+                        assert!(finished);
+                        eprintln!("Final batch size {batch_size}.");
+                    }
+
+                    // Combine shares
+                    for i in 0..batch_size {
+                        let mut numerator = [0_u16; 31];
+                        let denominator = den[i];
+                        for share in shares.iter() {
+                            for (&share, numerator) in share[i].iter().zip(numerator.iter_mut()) {
+                                *numerator = numerator.wrapping_add(share);
+                            }
+                        }
+
+                        // TODO: The distances must be in a valid range, we can use this to detect
+                        // errors.
+                        let distance = decode_distance(&numerator, &denominator);
+
+                        if distance < min_distance {
+                            min_index = i;
+                            min_distance = distance;
+                        }
+                    }
 
                     if finished {
                         eprintln!("Finished at sequence number {i}.");
                         break;
                     }
 
-                    // TODO: The distances must be in a valid range, we can use this to detect
-                    // errors.
-
-                    // Decode distances
-                    // eprintln!("Compute distances.");
-                    let distance = decode_distance(&distances, &den);
-
-                    // Keep track of closest
-                    // eprintln!("Track results.");
-                    if distance < min_distance {
-                        min_index = i;
-                        min_distance = distance;
-                    }
-
                     // Update progress
-                    // eprintln!("Update progress.");
-                    i += 1;
-                    if i % 1024 == 0 {
-                        progress_bar.inc(1024);
-                    }
+                    i += batch_size;
+                    progress_bar.inc(batch_size as u64);
                 }
                 progress_bar.finish();
 
