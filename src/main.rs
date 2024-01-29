@@ -621,6 +621,9 @@ async fn main() -> Result<(), anyhow::Error> {
                 loop {
                     buffer.clear();
                     stream.read_buf(&mut buffer).await?;
+                    if buffer.is_empty() {
+                        break;
+                    }
                     i += buffer.len();
                     progress_bar.inc(buffer.len() as u64);
                 }
