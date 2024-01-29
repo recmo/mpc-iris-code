@@ -70,6 +70,10 @@ enum Commands {
     /// Start the resolver, a participant which coordinates the ceremony
     #[command(arg_required_else_help = true)]
     Resolver(ResolverArgs),
+
+    /// Benchmark a participant
+    #[command(arg_required_else_help = true)]
+    Benchmark(BenchmarkArgs),
 }
 
 #[derive(Debug, Args)]
@@ -126,6 +130,12 @@ struct ResolverArgs {
 
     /// Participant addresses
     participants: Vec<SocketAddr>,
+}
+
+#[derive(Debug, Args)]
+struct BenchmarkArgs {
+    /// Participant address
+    participant: SocketAddr,
 }
 
 #[tokio::main]
@@ -578,6 +588,45 @@ async fn main() -> Result<(), anyhow::Error> {
             }
 
             Ok(())
+        }
+        Commands::Benchmark(args) => {
+            eprintln!("Participant: {:?}", &args.participant);
+
+            eprintln!("Starting main loop.");
+            let mut max_size = 0;
+            loop {
+                eprintln!("Generating random request.");
+                // Generate random request.
+                let query: Template = thread_rng().gen();
+
+                // Connect to participant
+                eprintln!("Calling participant.");
+                let mut stream = TcpStream::connect(args.participant)
+                    .await
+                    .with_context(|| format!("Could not connect to {}", args.participant))?;
+                eprintln!("Connected to {}", args.participant);
+
+                // Send query
+                stream.write_all(bytes_of(&query)).await?;
+                eprintln!("Request send.");
+
+                // Read buffered
+                let mut stream = BufReader::new(stream);
+
+                // Process results
+                eprintln!("Reading share.");
+                let progress_bar = ProgressBar::new(max_size as u64).with_style(byte_style.clone());
+                let mut i = 0;
+                let mut buffer = Vec::with_capacity(10_000_000);
+                loop {
+                    buffer.clear();
+                    stream.read_buf(&mut buffer).await?;
+                    i += buffer.len();
+                    progress_bar.inc(buffer.len() as u64);
+                }
+                progress_bar.finish();
+                max_size = max_size.max(i);
+            }
         }
         _ => todo!(),
     }
