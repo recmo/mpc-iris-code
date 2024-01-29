@@ -4,6 +4,7 @@ mod encoded_bits;
 mod template;
 
 pub use crate::{bits::Bits, encoded_bits::EncodedBits, template::Template};
+use rayon::prelude::*;
 
 pub const COLS: usize = 200;
 pub const ROWS: usize = 4 * 16;
@@ -21,6 +22,33 @@ pub fn encode(template: &Template) -> EncodedBits {
 
     // Preprocessed is (mask - 2 * pattern)
     mask - &pattern - &pattern
+}
+
+pub struct DistanceEngine {
+    rotations: Box<[EncodedBits; 31]>,
+}
+
+impl DistanceEngine {
+    pub fn new(query: &EncodedBits) -> Self {
+        let rotations = (-15..=15)
+            .map(|r| query.rotated(r))
+            .collect::<Box<[EncodedBits]>>()
+            .try_into()
+            .unwrap();
+        Self { rotations }
+    }
+
+    pub fn batch_process(&self, out: &mut [[u16; 31]], db: &[EncodedBits]) {
+        assert_eq!(out.len(), db.len());
+        out.par_iter_mut()
+            .zip(db.par_iter())
+            .for_each(|(result, entry)| {
+                // Compute dot product for each rotation
+                for (d, rotation) in result.iter_mut().zip(self.rotations.iter()) {
+                    *d = rotation.dot(entry);
+                }
+            });
+    }
 }
 
 /// Compute encoded distances for each rotation, iterating over a database
@@ -126,7 +154,7 @@ mod tests {
             // Encode entry
             let preprocessed = encode(&query);
             let distances = distances(&preprocessed, &[encrypted]).next().unwrap();
-            let denominators = denominators(&query.mask, &entry.mask);
+            let denominators = denominators(&query.mask, &[entry.mask]).next().unwrap();
 
             // Measure encoded distance
             let actual = decode_distance(&distances, &denominators);

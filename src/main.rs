@@ -1,46 +1,39 @@
 mod json_stream;
 
 use crate::json_stream::iter_json_array;
-use anyhow::{format_err, Context, Error, Ok, Result};
-use bytemuck::{bytes_of, bytes_of_mut, try_cast_slice};
+use anyhow::{format_err, Context, Ok, Result};
+use bytemuck::{bytes_of, bytes_of_mut, cast_slice, cast_slice_mut, try_cast_slice};
 use clap::{Args, Parser, Subcommand};
 use clap_num::si_number;
-use futures::{stream, StreamExt};
 use indicatif::{HumanBytes, HumanCount, ProgressBar, ProgressStyle};
-use itertools::Itertools;
 use memmap::MmapOptions;
 use mpc_iris_code::{
-    decode_distance, denominators, distances, encode, Bits, EncodedBits, Template,
+    decode_distance, denominators, encode, Bits, DistanceEngine, EncodedBits, Template,
 };
 use rand::{thread_rng, Rng};
 use rayon::{
     current_num_threads,
-    iter::{
-        IndexedParallelIterator, IntoParallelIterator, IntoParallelRefIterator,
-        ParallelIterator as _,
-    },
+    iter::{IndexedParallelIterator, IntoParallelRefIterator, ParallelIterator as _},
     prelude::*,
-    result, ThreadPoolBuilder,
+    ThreadPoolBuilder,
 };
 use std::{
     cmp::min,
-    io::Write,
     mem::{size_of, swap},
-    net::{SocketAddr, TcpListener, TcpStream},
+    net::SocketAddr,
     os::unix::fs::MetadataExt,
     path::PathBuf,
     sync::{
         atomic::{AtomicUsize, Ordering},
-        Mutex,
+        Arc,
     },
     thread::available_parallelism,
 };
 use tokio::{
     fs::{File, OpenOptions},
-    io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader, BufWriter},
+    io::{AsyncReadExt, AsyncWriteExt, BufReader, BufWriter},
+    net::{TcpListener, TcpStream},
     sync::mpsc,
-    task::spawn_blocking,
-    try_join,
 };
 
 /// Search for a pattern in a file and display the lines that contain it.
@@ -69,13 +62,13 @@ enum Commands {
     /// Combine secret shares back to json
     Decrypt,
 
-    /// Start coordination server
-    #[command(arg_required_else_help = true)]
-    Coordinator(CoordinatorArgs),
-
-    /// Start party member
+    /// Start participant
     #[command(arg_required_else_help = true)]
     Participant(ParticipantArgs),
+
+    /// Start the resolver, a participant which coordinates the ceremony
+    #[command(arg_required_else_help = true)]
+    Resolver(ResolverArgs),
 }
 
 #[derive(Debug, Args)]
@@ -117,10 +110,13 @@ struct ParticipantArgs {
 }
 
 #[derive(Debug, Args)]
-struct CoordinatorArgs {
-    /// Input main file
-    #[arg(long, default_value = "mpc.main")]
-    input: PathBuf,
+struct ResolverArgs {
+    /// Masks file
+    #[arg(long, default_value = "mpc.masks")]
+    masks: PathBuf,
+
+    /// Optional share file if the resolver is also a participant
+    share: Option<PathBuf>,
 
     /// Socket to listen on for API requests
     #[arg(long, default_value = "127.0.0.1:8080")]
@@ -268,15 +264,15 @@ async fn main() -> Result<()> {
             // Generate output files
             eprintln!(
                 "Output {:?} {:?}",
-                args.output.with_extension("main"),
+                args.output.with_extension("masks"),
                 args.output.with_extension("share-n")
             );
-            let mut main = File::create(args.output.with_extension("main"))
+            let mut masks = File::create(args.output.with_extension("masks"))
                 .await
                 .map(BufWriter::new)?;
-            let mut outputs = Vec::new();
+            let mut shares = Vec::new();
             for i in 0..args.count {
-                outputs.push(
+                shares.push(
                     File::create(args.output.with_extension(format!("share-{i}")))
                         .await
                         .map(BufWriter::new)?,
@@ -338,15 +334,15 @@ async fn main() -> Result<()> {
             // Write
             let progress = ProgressBar::new(total_size.0).with_style(byte_style);
             while let Some((buf_main, buf_outputs)) = buffers.recv().await {
-                main.write_all(&buf_main).await?;
+                masks.write_all(&buf_main).await?;
                 progress.inc(buf_main.len() as u64);
-                for (output, buffer) in outputs.iter_mut().zip(buf_outputs) {
+                for (output, buffer) in shares.iter_mut().zip(buf_outputs) {
                     output.write_all(&buffer).await?;
                     progress.inc(buffer.len() as u64);
                 }
             }
-            main.flush().await?;
-            for output in &mut outputs {
+            masks.flush().await?;
+            for output in &mut shares {
                 output.flush().await?;
             }
 
@@ -354,147 +350,200 @@ async fn main() -> Result<()> {
             process_task.await??;
             progress.finish();
         }
-        // Commands::Coordinator(args) => {
-        //     // Read main file with masks
-        //     let file = File::open(&args.input)
-        //         .with_context(|| format!("Failed to open main at {:?}", args.input))?;
-        //     let size = HumanBytes(file.metadata()?.size());
-        //     let mmap = unsafe { MmapOptions::new().map(&file)? };
-        //     let masks: &[Bits] = try_cast_slice(&mmap)
-        //         .map_err(|_| format_err!("Main file {:?} invalid.", args.input))?;
-        //     eprintln!(
-        //         "Opened main {:?} with {} masks ({})",
-        //         args.input,
-        //         HumanCount(masks.len() as u64),
-        //         size
-        //     );
-
-        //     loop {
-        //         // Generate random request.
-        //         let query: Template = thread_rng().gen();
-
-        //         // Contact participants
-        //         let mut streams: Box<[_]> = args
-        //             .participants
-        //             .iter()
-        //             .map(|address| {
-        //                 // Connect to participant
-        //                 let mut stream = TcpStream::connect(address)
-        //                     .with_context(|| format!("Could not connect to {address}"))?;
-        //                 eprintln!("Connected to {address}");
-
-        //                 // Send query
-        //                 stream.write_all(bytes_of(&query))?;
-        //                 eprintln!("Request send.");
-
-        //                 // Read buffered
-        //                 let stream = BufReader::new(stream);
-        //                 Ok::<_, Error>(stream)
-        //             })
-        //             .collect::<Result<_, _>>()?;
-
-        //         // Prepare local computation of denominators
-        //         let denominators = denominators(&query.mask, masks);
-
-        //         // Keep track of min distance entry.
-        //         let mut min_distance = f64::INFINITY;
-        //         let mut min_index = usize::MAX;
-
-        //         // Process results
-        //         let progress_bar =
-        //             ProgressBar::new(masks.len() as u64).with_style(count_style.clone());
-        //         for (i, denominators) in denominators.enumerate() {
-        //             if i % 1024 == 0 {
-        //                 progress_bar.inc(1024);
-        //             }
-
-        //             // Fetch and combine distance shares from participants
-        //             let mut distances = [0_u16; 31];
-        //             for (node, stream) in streams.iter_mut().enumerate() {
-        //                 // Read share
-        //                 let mut share = [0_u16; 31];
-        //                 stream
-        //                     .read_exact(bytes_of_mut(&mut share))
-        //                     .with_context(|| {
-        //                         format!("Failed to read distances for record {i} from node
-        // {node}.")                     })?;
-
-        //                 // Combine
-        //                 for (d, &s) in distances.iter_mut().zip(share.iter()) {
-        //                     *d = d.wrapping_add(s);
-        //                 }
-        //             }
-
-        //             // TODO: The distances must be in a valid range, we can use this to detect
-        //             // errors.
-
-        //             // Decode distances
-        //             let distance = decode_distance(&distances, &denominators);
-
-        //             // TODO: Return list of all matches.
-
-        //             if distance < min_distance {
-        //                 min_index = i;
-        //                 min_distance = distance;
-        //             }
-        //         }
-        //         progress_bar.finish();
-
-        //         eprintln!("Found closest entry at {min_index} distance {min_distance}");
-        //     }
-        // }
         Commands::Participant(args) => {
             // Read share as memory mapped file.
             let file = std::fs::File::open(&args.input)
                 .with_context(|| format!("Failed to open share at {:?}", args.input))?;
             let size = HumanBytes(file.metadata()?.size());
-            let mmap = unsafe { MmapOptions::new().map(&file)? };
-            let patterns: &[EncodedBits] = try_cast_slice(&mmap)
-                .map_err(|_| format_err!("Share file {:?} invalid.", args.input))?;
-            eprintln!(
-                "Opened share {:?} with {} encrypted patterns ({})",
-                args.input,
-                HumanCount(patterns.len() as u64),
-                size
-            );
+            let mmap = Arc::new(unsafe { MmapOptions::new().map(&file)? });
+            let count = {
+                let patterns: &[EncodedBits] = try_cast_slice(&mmap)
+                    .map_err(|_| format_err!("Share file {:?} invalid.", args.input))?;
+                eprintln!(
+                    "Opened share {:?} with {} encrypted patterns ({})",
+                    args.input,
+                    HumanCount(patterns.len() as u64),
+                    size
+                );
+                patterns.len()
+            };
 
             // TODO: Sync from database and add to memmapped file.
 
             // Open socket
             let listener = TcpListener::bind(args.bind)
+                .await
                 .with_context(|| format!("Could not bind to socket {}", args.bind))?;
             eprintln!("Listening on {}", listener.local_addr()?);
 
             // Listen for requests
-            for stream in listener.incoming() {
+            for (mut stream, peer) in listener.accept().await {
                 // TODO: Catch errors and panics.
-
-                eprintln!("Socket opened.");
-                let mut stream = stream?;
-
-                // Read request
-                let mut template = Template::default();
-                std::io::Read::read_exact(&mut stream, bytes_of_mut(&muttemplate))?;
-                eprintln!("Request received.");
+                eprintln!("Inbound from {peer:?}");
 
                 // TODO: Sync from database and add to memmapped file.
 
-                // Preprocess
-                let query = encode(&template);
-                let results = distances(&query, &patterns);
+                // Read request
+                let mut template = Template::default();
+                stream.read_exact(bytes_of_mut(&mut template)).await?;
+                eprintln!("Request received.");
+
+                // Process in worker thread
+                let (sender, mut receiver) = mpsc::channel(4);
+                let mmap_ref = mmap.clone();
+                let worker = tokio::task::spawn_blocking(move || {
+                    let patterns: &[EncodedBits] = cast_slice(&mmap_ref);
+                    let engine = DistanceEngine::new(&encode(&template));
+                    for chunk in patterns.chunks(20_000) {
+                        let mut result = vec![0_u8; chunk.len() * size_of::<[u16; 31]>()];
+                        engine.batch_process(cast_slice_mut(&mut result), chunk);
+                        sender.blocking_send(result)?;
+                    }
+                    Ok(())
+                });
 
                 // Stream output
-                let progress_bar =
-                    ProgressBar::new(patterns.len() as u64).with_style(count_style.clone());
+                let progress_bar = ProgressBar::new((count * size_of::<[u16; 31]>()) as u64)
+                    .with_style(byte_style.clone());
                 let mut buf = BufWriter::new(stream);
-                for (i, distances) in results.enumerate() {
+                while let Some(buffer) = receiver.recv().await {
+                    buf.write_all(&buffer).await?;
+                    progress_bar.inc(buffer.len() as u64);
+                }
+                progress_bar.finish();
+                worker.await??;
+                eprintln!("Reply sent.");
+            }
+        }
+        Commands::Resolver(args) => {
+            // Read main file with masks
+            let file = std::fs::File::open(&args.masks)
+                .with_context(|| format!("Failed to open main at {:?}", args.masks))?;
+            let size = HumanBytes(file.metadata()?.size());
+            let mmap = Arc::new(unsafe { MmapOptions::new().map(&file)? });
+            let count = {
+                let masks: &[Bits] = try_cast_slice(&mmap)
+                    .map_err(|_| format_err!("Main file {:?} invalid.", args.masks))?;
+                eprintln!(
+                    "Opened main {:?} with {} masks ({})",
+                    args.masks,
+                    HumanCount(masks.len() as u64),
+                    size
+                );
+                masks.len()
+            };
+
+            eprintln!("Starting main loop.");
+            loop {
+                eprintln!("Generating random request.");
+                // Generate random request.
+                let query: Template = thread_rng().gen();
+
+                // Contact participants
+                // TODO: Async parallel connect
+                eprintln!("Calling participants.");
+                let mut streams = Vec::with_capacity(args.participants.len());
+                for address in args.participants.iter() {
+                    // Connect to participant
+                    let mut stream = TcpStream::connect(address)
+                        .await
+                        .with_context(|| format!("Could not connect to {address}"))?;
+                    eprintln!("Connected to {address}");
+
+                    // Send query
+                    stream.write_all(bytes_of(&query)).await?;
+                    eprintln!("Request send.");
+
+                    // Read buffered
+                    let stream = BufReader::new(stream);
+                    streams.push(stream);
+                }
+
+                // Prepare local computation of denominators
+                eprintln!("Locally computing denominators.");
+                let mmap_ref = mmap.clone();
+                let (sender, mut receiver) = mpsc::channel(4);
+                let denomoninator_worker = tokio::task::spawn_blocking(move || {
+                    // eprintln!("💠 Accessing masks.");
+                    let masks: &[Bits] = cast_slice(&mmap_ref);
+
+                    // eprintln!("💠 Computing denominators.");
+                    let denominators = denominators(&query.mask, masks);
+                    // TODO: Batch process.
+                    for denominator in denominators {
+                        // eprintln!("💠 Sending denominator.");
+                        sender.blocking_send(denominator)?;
+                    }
+
+                    Ok(())
+                });
+
+                // Keep track of min distance entry.
+                let mut min_distance = f64::INFINITY;
+                let mut min_index = usize::MAX;
+
+                // Process results
+                eprintln!("Processing results.");
+                let progress_bar = ProgressBar::new(count as u64).with_style(count_style.clone());
+                let mut i = 0;
+                loop {
+                    // Collect shares
+                    // eprintln!("Collect shares.");
+                    let mut shares = Vec::with_capacity(streams.len());
+                    for stream in &mut streams {
+                        let mut share = [0_u16; 31];
+                        stream.read_exact(bytes_of_mut(&mut share)).await?;
+                        shares.push(share);
+                    }
+
+                    // Combine shares
+                    // eprintln!("Combine shares.");
+                    let mut distances = [0_u16; 31];
+                    for share in shares {
+                        for (d, &s) in distances.iter_mut().zip(share.iter()) {
+                            *d = d.wrapping_add(s);
+                        }
+                    }
+
+                    // Collect denominator
+                    // eprintln!("Collect denominators.");
+                    let Some(den) = receiver.recv().await else {
+                        eprintln!("Denominators ran out.");
+                        break;
+                    };
+
+                    // TODO: The distances must be in a valid range, we can use this to detect
+                    // errors.
+
+                    // Decode distances
+                    // eprintln!("Compute distances.");
+                    let distance = decode_distance(&distances, &den);
+
+                    // Keep track of closest
+                    // eprintln!("Track results.");
+                    if distance < min_distance {
+                        min_index = i;
+                        min_distance = distance;
+                    }
+
+                    // Update progress
+                    // eprintln!("Update progress.");
+                    i += 1;
                     if i % 1024 == 0 {
                         progress_bar.inc(1024);
                     }
-                    buf.write_all(bytes_of(&distances))?;
                 }
                 progress_bar.finish();
-                eprintln!("Reply sent.");
+
+                // Await processes.
+                // Note that some can be stopped early due to receiver being closed.
+                drop(receiver);
+                drop(streams);
+                denomoninator_worker.await??;
+
+                eprintln!(
+                    "Found closest entry at {min_index} out of {i} at distance {min_distance}."
+                );
             }
         }
         _ => todo!(),

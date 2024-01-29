@@ -23,7 +23,7 @@ pub fn distances<'a>(
             .for_each(|(result, entry)| {
                 // Compute dot product for each rotation
                 for (d, rotation) in result.iter_mut().zip(rotations.iter()) {
-                    *d = rotation.dot(&entry);
+                    *d = rotation.dot(entry);
                 }
             });
 
@@ -40,18 +40,18 @@ pub fn denominators<'a>(query: &'a Bits, db: &'a [Bits]) -> impl Iterator<Item =
 
     // Iterate over a batch of database entries
     db.chunks(BATCH).flat_map(move |chunk| {
-        let mut results = [[0_u16; 31]; BATCH];
-
         // Parallel computation over batch
-        results
-            .par_iter_mut()
-            .zip(chunk.par_iter())
-            .for_each(|(result, entry)| {
+        let results = chunk
+            .par_iter()
+            .map(|(entry)| {
+                let mut result = [0_u16; 31];
                 // Compute dot product for each rotation
                 for (d, rotation) in result.iter_mut().zip(rotations.iter()) {
-                    *d = rotation.dot(&entry);
+                    *d = rotation.dot(entry);
                 }
-            });
+                result
+            })
+            .collect::<Vec<_>>();
 
         // Sequentially output results
         results.into_iter().take(chunk.len())

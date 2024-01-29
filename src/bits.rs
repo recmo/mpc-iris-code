@@ -181,7 +181,7 @@ impl ops::BitXorAssign<&Bits> for Bits {
 
 fn rotate_row(a: &mut [u8; BYTES_PER_COL], mut amount: i32) {
     if amount <= -8 {
-        a.rotate_left((amount.abs() as usize) / 8);
+        a.rotate_left((amount.unsigned_abs() as usize) / 8);
         amount %= 8;
     } else if amount >= 8 {
         a.rotate_right((amount as usize) / 8);

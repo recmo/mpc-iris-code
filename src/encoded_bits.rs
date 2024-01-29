@@ -39,7 +39,7 @@ impl EncodedBits {
 
     pub fn rotate(&mut self, amount: i32) {
         if amount < 0 {
-            let amount = amount.abs() as usize;
+            let amount = amount.unsigned_abs() as usize;
             for row in self.0.chunks_exact_mut(COLS) {
                 row.rotate_left(amount);
             }

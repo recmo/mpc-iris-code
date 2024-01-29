@@ -1,3 +1,5 @@
+# cargo-features = ["profile-rustflags"]
+
 [package]
 name = "mpc-iris-code"
 version = "0.1.0"
@@ -36,6 +38,8 @@ required-features = ["bench"]
 [profile.release]
 opt-level = 3
 lto = "fat"
+# rustflags = ["-Ctarget-cpu=apple-m2"]
+# rustflags = ["-Ctarget-cpu=neoverse-v1"]
 
 # samply record --rate 10000 -- cargo bench --profile profiling --bench bench --features bench -- --profile-time 60 distance4
 # samply record -- cargo run  --profile profiling -- participant ./mpc.share-0
