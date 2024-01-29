@@ -19,6 +19,7 @@ use rayon::{
 };
 use std::{
     cmp::min,
+    io::ErrorKind,
     mem::{size_of, swap},
     net::SocketAddr,
     os::unix::fs::MetadataExt,
@@ -116,6 +117,7 @@ struct ResolverArgs {
     masks: PathBuf,
 
     /// Optional share file if the resolver is also a participant
+    #[arg(long)]
     share: Option<PathBuf>,
 
     /// Socket to listen on for API requests
@@ -127,7 +129,7 @@ struct ResolverArgs {
 }
 
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn main() -> Result<(), anyhow::Error> {
     let args = Cli::parse();
 
     // Configure rayon global thread pool
@@ -235,6 +237,8 @@ async fn main() -> Result<()> {
             // Finalize the file
             buffer.write_all(b"]\n").await?;
             buffer.flush().await?;
+
+            Ok(())
         }
         Commands::Prepare(args) => {
             // Open input file (synchronous IO for Serde)
@@ -258,8 +262,8 @@ async fn main() -> Result<()> {
             // A processing thread computing shares as (Vec<u8>, Vec<Vec<u8>>)
             // A writer thread writing buffers to the files.
 
-            // Note: if we are clever about random number generation only the main and one
-            // share thread needs to see the templates.
+            // Note: if we are clever about random number generation only the main
+            // and one share thread needs to see the templates.
 
             // Generate output files
             eprintln!(
@@ -315,7 +319,7 @@ async fn main() -> Result<()> {
                         .collect::<Vec<_>>();
 
                     // Sequentially merge share outputs
-                    // It would be nice if we could write these in place like with the main share.
+                    // It would be nice if we could write these in place likewith the main share.
                     let mut outputs: Vec<Vec<u8>> =
                         vec![
                             Vec::with_capacity(templates.len() * size_of::<EncodedBits>());
@@ -349,6 +353,8 @@ async fn main() -> Result<()> {
             reader_task.await??;
             process_task.await??;
             progress.finish();
+
+            Ok(())
         }
         Commands::Participant(args) => {
             // Read share as memory mapped file.
@@ -377,8 +383,8 @@ async fn main() -> Result<()> {
             eprintln!("Listening on {}", listener.local_addr()?);
 
             // Listen for requests
-            for (mut stream, peer) in listener.accept().await {
-                // TODO: Catch errors and panics.
+            loop {
+                let (mut stream, peer) = listener.accept().await?;
                 eprintln!("Inbound from {peer:?}");
 
                 // TODO: Sync from database and add to memmapped file.
@@ -414,6 +420,8 @@ async fn main() -> Result<()> {
                 worker.await??;
                 eprintln!("Reply sent.");
             }
+
+            Ok(())
         }
         Commands::Resolver(args) => {
             // Read main file with masks
@@ -432,6 +440,8 @@ async fn main() -> Result<()> {
                 );
                 masks.len()
             };
+
+            eprintln!("Participants: {:?}", &args.participants);
 
             eprintln!("Starting main loop.");
             loop {
@@ -459,6 +469,9 @@ async fn main() -> Result<()> {
                     streams.push(stream);
                 }
 
+                // TODO: Local share.
+                assert!(args.share.is_none());
+
                 // Prepare local computation of denominators
                 eprintln!("Locally computing denominators.");
                 let mmap_ref = mmap.clone();
@@ -468,8 +481,7 @@ async fn main() -> Result<()> {
                     let masks: &[Bits] = cast_slice(&mmap_ref);
 
                     // eprintln!("💠 Computing denominators.");
-                    let denominators = denominators(&query.mask, masks);
-                    // TODO: Batch process.
+                    let denominators = denominators(&query.mask, masks); // TODO: Batch process.
                     for denominator in denominators {
                         // eprintln!("💠 Sending denominator.");
                         sender.blocking_send(denominator)?;
@@ -487,12 +499,23 @@ async fn main() -> Result<()> {
                 let progress_bar = ProgressBar::new(count as u64).with_style(count_style.clone());
                 let mut i = 0;
                 loop {
+                    // Track if we reached the end.
+                    let mut finished = false;
+
                     // Collect shares
                     // eprintln!("Collect shares.");
                     let mut shares = Vec::with_capacity(streams.len());
-                    for stream in &mut streams {
+                    for (j, stream) in streams.iter_mut().enumerate() {
                         let mut share = [0_u16; 31];
-                        stream.read_exact(bytes_of_mut(&mut share)).await?;
+                        if let Err(err) = stream.read_exact(bytes_of_mut(&mut share)).await {
+                            match err.kind() {
+                                ErrorKind::UnexpectedEof => {
+                                    eprintln!("Share {j} ran out at sequence number {i}.");
+                                    finished = true;
+                                }
+                                _ => return Err(err.into()),
+                            };
+                        }
                         shares.push(share);
                     }
 
@@ -507,10 +530,18 @@ async fn main() -> Result<()> {
 
                     // Collect denominator
                     // eprintln!("Collect denominators.");
-                    let Some(den) = receiver.recv().await else {
-                        eprintln!("Denominators ran out.");
-                        break;
+                    let den = if let Some(den) = receiver.recv().await {
+                        den
+                    } else {
+                        eprintln!("Masks ran out at sequence number {i}.");
+                        finished = true;
+                        [0_u16; 31]
                     };
+
+                    if finished {
+                        eprintln!("Finished at sequence number {i}.");
+                        break;
+                    }
 
                     // TODO: The distances must be in a valid range, we can use this to detect
                     // errors.
@@ -545,8 +576,9 @@ async fn main() -> Result<()> {
                     "Found closest entry at {min_index} out of {i} at distance {min_distance}."
                 );
             }
+
+            Ok(())
         }
         _ => todo!(),
     }
-    Ok(())
 }
