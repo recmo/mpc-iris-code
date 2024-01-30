@@ -5,12 +5,11 @@ use anyhow::{format_err, Context, Ok, Result};
 use bytemuck::{bytes_of, bytes_of_mut, cast_slice, cast_slice_mut, try_cast_slice};
 use clap::{Args, Parser, Subcommand};
 use clap_num::si_number;
-use core::num;
 use futures::future::try_join_all;
 use indicatif::{HumanBytes, HumanCount, ProgressBar, ProgressStyle};
 use memmap::MmapOptions;
 use mpc_iris_code::{
-    decode_distance, denominators, encode, Bits, DistanceEngine, EncodedBits, MasksEngine, Template,
+    decode_distance, encode, Bits, DistanceEngine, EncodedBits, MasksEngine, Template,
 };
 use rand::{thread_rng, Rng};
 use rayon::{
@@ -21,8 +20,7 @@ use rayon::{
 };
 use std::{
     cmp::min,
-    io::ErrorKind,
-    mem::{align_of, size_of, swap},
+    mem::{size_of, swap},
     net::SocketAddr,
     os::unix::fs::MetadataExt,
     path::PathBuf,
@@ -35,6 +33,7 @@ use std::{
 use tokio::{
     fs::{File, OpenOptions},
     io::{AsyncReadExt, AsyncWriteExt, BufReader, BufWriter},
+    join,
     net::{TcpListener, TcpStream},
     sync::mpsc,
 };
@@ -72,6 +71,10 @@ enum Commands {
     /// Start the resolver, a participant which coordinates the ceremony
     #[command(arg_required_else_help = true)]
     Resolver(ResolverArgs),
+
+    /// Alias for resolver
+    #[command(arg_required_else_help = true)]
+    Coordinator(ResolverArgs),
 
     /// Benchmark a participant
     #[command(arg_required_else_help = true)]
@@ -207,7 +210,7 @@ async fn main() -> Result<(), anyhow::Error> {
                 let remaining = AtomicUsize::new(args.count.saturating_sub(1));
                 let remaining_ref = &remaining;
                 rayon::scope(|scope| {
-                    scope.spawn_broadcast(|scope, context| {
+                    scope.spawn_broadcast(|_scope, _context| {
                         let mut rng = thread_rng();
                         loop {
                             // Atomically compute batch size based on remaining elements
@@ -223,7 +226,7 @@ async fn main() -> Result<(), anyhow::Error> {
 
                             // Compute a batch of random templates in JSON
                             let mut buf = Vec::with_capacity(6434 * batch_size);
-                            for i in 0..batch_size {
+                            for _ in 0..batch_size {
                                 buf.push(b',');
                                 serde_json::to_writer_pretty(&mut buf, &rng.gen::<Template>())
                                     .expect("Should serialize.");
@@ -433,9 +436,11 @@ async fn main() -> Result<(), anyhow::Error> {
                 eprintln!("Reply sent.");
             }
 
+            // TODO: A clean way to exit
+            #[allow(unreachable_code)]
             Ok(())
         }
-        Commands::Resolver(args) => {
+        Commands::Coordinator(args) | Commands::Resolver(args) => {
             // Read main file with masks
             let file = std::fs::File::open(&args.masks)
                 .with_context(|| format!("Failed to open main at {:?}", args.masks))?;
@@ -491,7 +496,7 @@ async fn main() -> Result<(), anyhow::Error> {
                 // Prepare local computation of denominators
                 eprintln!("Locally computing denominators.");
                 let mmap_ref = mmap.clone();
-                let (sender, mut receiver) = mpsc::channel(4000);
+                let (sender, mut denom_receiver) = mpsc::channel(4);
                 let denomoninator_worker = tokio::task::spawn_blocking(move || {
                     let masks: &[Bits] = cast_slice(&mmap_ref);
                     let engine = MasksEngine::new(&query.mask);
@@ -499,6 +504,65 @@ async fn main() -> Result<(), anyhow::Error> {
                         let mut result = vec![[0_u16; 31]; chunk.len()];
                         engine.batch_process(&mut result, chunk);
                         sender.blocking_send(result)?;
+                    }
+                    Ok(())
+                });
+
+                // Collect batches of shares
+                let (sender, mut receiver) = mpsc::channel(4);
+                let batch_worker = tokio::task::spawn(async move {
+                    loop {
+                        // Collect futures of denominator and share batches
+                        let streams_future = try_join_all(streams.iter_mut().enumerate().map(
+                            |(i, stream)| async move {
+                                // Allocate a buffer and cast to bytes
+                                // OPT: Could use MaybeUninit here.
+                                let mut batch = vec![[0_u16; 31]; BATCH_SIZE];
+                                let mut buffer: &mut [u8] = cast_slice_mut(batch.as_mut_slice());
+
+                                // We can not use read_exact here as we might get EOF before the
+                                // buffer is full But we should
+                                // still try to fill the entire buffer.
+                                // If nothing else, this guarantees that we read batches at a
+                                // [u16;31] boundary.
+                                while !buffer.is_empty() {
+                                    let bytes_read = stream.read_buf(&mut buffer).await?;
+                                    if bytes_read == 0 {
+                                        // End of stream
+                                        eprintln!("Participant {i} finished.");
+                                        if buffer.len() % size_of::<[u16; 31]>() != 0 {
+                                            eprintln!(
+                                                "Warning: received partial results from {i}."
+                                            );
+                                        }
+                                        let n_incomplete = (buffer.len() + size_of::<[u16; 31]>()
+                                            - 1)
+                                            / size_of::<[u16; 31]>();
+                                        batch.truncate(batch.len() - n_incomplete);
+                                        break;
+                                    }
+                                }
+                                Ok(batch)
+                            },
+                        ));
+
+                        // Wait on all parts concurrently
+                        let (denom, shares) = join!(denom_receiver.recv(), streams_future);
+                        let mut denom = denom.unwrap_or_default();
+                        let mut shares = shares?;
+
+                        // Find the shortest prefix
+                        let batch_size = shares.iter().map(Vec::len).fold(denom.len(), min);
+                        denom.truncate(batch_size);
+                        shares
+                            .iter_mut()
+                            .for_each(|batch| batch.truncate(batch_size));
+
+                        // Send batches
+                        sender.send((denom, shares)).await?;
+                        if batch_size == 0 {
+                            break;
+                        }
                     }
                     Ok(())
                 });
@@ -512,74 +576,41 @@ async fn main() -> Result<(), anyhow::Error> {
                 let progress_bar = ProgressBar::new(count as u64).with_style(count_style.clone());
                 let mut i = 0;
                 loop {
-                    // Track if we reached the end.
-                    let mut finished = false;
+                    // Fetch batches of denominators and shares
+                    let (denom_batch, shares) = receiver.recv().await.unwrap();
+                    let batch_size = denom_batch.len();
+                    if batch_size == 0 {
+                        break;
+                    }
 
-                    // Collect batches of shares
-                    let mut shares = Vec::with_capacity(streams.len());
-                    for (j, stream) in streams.iter_mut().enumerate() {
-                        let mut batch = vec![[0_u16; 31]; BATCH_SIZE];
-                        let mut buffer: &mut [u8] = cast_slice_mut(batch.as_mut_slice());
-
-                        while !buffer.is_empty() {
-                            let bytes_read = stream.read_buf(&mut buffer).await?;
-                            if bytes_read == 0 {
-                                // End of stream
-                                finished = true;
-                                eprintln!("Participant {j} finished.");
-                                if buffer.len() % size_of::<[u16; 31]>() != 0 {
-                                    eprintln!("Warning: received partial results from {j}.");
+                    // Compute batch of distances in Rayon
+                    let worker = tokio::task::spawn_blocking(move || {
+                        (0..batch_size)
+                            .into_par_iter()
+                            .map(|i| {
+                                let denominator = denom_batch[i];
+                                let mut numerator = [0_u16; 31];
+                                for share in shares.iter() {
+                                    let share = share[i];
+                                    for (n, &s) in numerator.iter_mut().zip(share.iter()) {
+                                        *n = n.wrapping_add(s);
+                                    }
                                 }
-                                let n_incomplete = (buffer.len() + size_of::<[u16; 31]>() - 1)
-                                    / size_of::<[u16; 31]>();
-                                batch.truncate(batch.len() - n_incomplete);
-                                break;
-                            }
-                        }
-                        shares.push(batch);
-                    }
+                                decode_distance(&numerator, &denominator)
+                            })
+                            .collect::<Vec<_>>()
+                    });
+                    let distances = worker.await?;
 
-                    // Collect batch of denominator
-                    let den = if let Some(den) = receiver.recv().await {
-                        den
-                    } else {
-                        eprintln!("Masks ran out at sequence number {i}.");
-                        finished = true;
-                        Vec::new()
-                    };
-
-                    let batch_size = shares.iter().map(|b| b.len()).fold(den.len(), usize::min);
-                    if batch_size < BATCH_SIZE {
-                        assert!(finished);
-                        eprintln!("Final batch size {batch_size}.");
-                    }
-
-                    // Combine shares
-                    for i in 0..batch_size {
-                        let mut numerator = [0_u16; 31];
-                        let denominator = den[i];
-                        for share in shares.iter() {
-                            for (&share, numerator) in share[i].iter().zip(numerator.iter_mut()) {
-                                *numerator = numerator.wrapping_add(share);
-                            }
-                        }
-
-                        // TODO: The distances must be in a valid range, we can use this to detect
-                        // errors.
-                        let distance = decode_distance(&numerator, &denominator);
-
+                    // Aggregate distances
+                    for (j, distance) in distances.into_iter().enumerate() {
                         if distance < min_distance {
-                            min_index = i;
+                            min_index = i + j;
                             min_distance = distance;
                         }
                     }
 
-                    if finished {
-                        eprintln!("Finished at sequence number {i}.");
-                        break;
-                    }
-
-                    // Update progress
+                    // Update counter
                     i += batch_size;
                     progress_bar.inc(batch_size as u64);
                 }
@@ -587,15 +618,18 @@ async fn main() -> Result<(), anyhow::Error> {
 
                 // Await processes.
                 // Note that some can be stopped early due to receiver being closed.
+                // TODO: Make sure that all workers receive signal to stop.
                 drop(receiver);
-                drop(streams);
                 denomoninator_worker.await??;
+                batch_worker.await??;
 
                 eprintln!(
                     "Found closest entry at {min_index} out of {i} at distance {min_distance}."
                 );
             }
 
+            // TODO: A clean way to exit
+            #[allow(unreachable_code)]
             Ok(())
         }
         Commands::Benchmark(args) => {
