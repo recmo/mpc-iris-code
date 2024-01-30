@@ -7,6 +7,7 @@ use clap::{Args, Parser, Subcommand};
 use clap_num::si_number;
 use futures::future::try_join_all;
 use indicatif::{HumanBytes, HumanCount, ProgressBar, ProgressStyle};
+use itertools::Itertools;
 use memmap::MmapOptions;
 use mpc_iris_code::{
     decode_distance, encode, Bits, DistanceEngine, EncodedBits, MasksEngine, Template,
@@ -30,6 +31,7 @@ use std::{
     },
     thread::available_parallelism,
 };
+use target_features::CURRENT_TARGET;
 use tokio::{
     fs::{File, OpenOptions},
     io::{AsyncReadExt, AsyncWriteExt, BufReader, BufWriter},
@@ -163,6 +165,16 @@ async fn main() -> Result<(), anyhow::Error> {
         "Using {} compute threads on {} cores.",
         current_num_threads(),
         available_parallelism()?
+    );
+    eprintln!(
+        "CPU features: {}",
+        CURRENT_TARGET.features().map(|f| f.name()).join(", ")
+    );
+    eprintln!(
+        "u16 simd width: {}",
+        CURRENT_TARGET
+            .suggested_simd_width::<u16>()
+            .unwrap_or_default()
     );
 
     let byte_style = ProgressStyle::with_template(

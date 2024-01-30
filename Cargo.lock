@@ -682,6 +682,7 @@ dependencies = [
  "rayon",
  "serde",
  "serde_json",
+ "target-features",
  "tokio",
 ]
 
@@ -1081,6 +1082,12 @@ dependencies = [
  "quote",
  "unicode-ident",
 ]
+
+[[package]]
+name = "target-features"
+version = "0.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cfb5fa503293557c5158bd215fdc225695e567a77e453f5d4452a50a193969bd"
 
 [[package]]
 name = "tempfile"

@@ -1,4 +1,4 @@
-mod arch;
+pub mod arch;
 mod bits;
 mod encoded_bits;
 mod template;
