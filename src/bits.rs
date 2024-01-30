@@ -7,7 +7,7 @@ use rand::{
 use serde::{de::Error as _, Deserialize, Serialize};
 use std::{fmt::Debug, ops, ops::Index};
 
-const LIMBS: usize = BITS / 64;
+pub(crate) const LIMBS: usize = BITS / 64;
 const BYTES_PER_COL: usize = COLS / 8;
 
 #[repr(transparent)]
@@ -33,11 +33,7 @@ impl Bits {
     }
 
     pub fn dot(&self, other: &Self) -> u16 {
-        self.0
-            .iter()
-            .zip(other.0.iter())
-            .map(|(&a, &b)| (a & b).count_ones() as u16)
-            .sum()
+        crate::arch::dot_bool(&self.0, &other.0)
     }
 }
 

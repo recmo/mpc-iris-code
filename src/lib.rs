@@ -4,6 +4,7 @@ mod encoded_bits;
 mod template;
 
 pub use crate::{bits::Bits, encoded_bits::EncodedBits, template::Template};
+use core::slice;
 use rayon::prelude::*;
 
 pub const COLS: usize = 200;
@@ -78,17 +79,18 @@ impl MasksEngine {
     }
 }
 
-/// Compute encoded distances for each rotation, iterating over a database
-pub fn distances<'a>(
-    query: &'a EncodedBits,
-    db: &'a [EncodedBits],
-) -> impl Iterator<Item = [u16; 31]> + 'a {
-    arch::distances(query, db)
+pub fn distances(query: &EncodedBits, entry: &EncodedBits) -> [u16; 31] {
+    let engine = DistanceEngine::new(query);
+    let mut result = [0_u16; 31];
+    engine.batch_process(slice::from_mut(&mut result), slice::from_ref(entry));
+    result
 }
 
-/// Compute the 31 rotated mask popcounts.
-pub fn denominators<'a>(query: &'a Bits, db: &'a [Bits]) -> impl Iterator<Item = [u16; 31]> + 'a {
-    arch::denominators(query, db)
+pub fn denominators(query: &Bits, entry: &Bits) -> [u16; 31] {
+    let engine = MasksEngine::new(query);
+    let mut result = [0_u16; 31];
+    engine.batch_process(slice::from_mut(&mut result), slice::from_ref(entry));
+    result
 }
 
 /// Decode a distances. Takes the minimum over the rotations
@@ -107,7 +109,7 @@ pub fn decode_distance(distances: &[u16; 31], denominators: &[u16; 31]) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{denominators, encode, template::tests::test_data};
+    use crate::{encode, template::tests::test_data};
     use float_eq::assert_float_eq;
     use proptest::bits::u16;
     use rand::{thread_rng, Rng};
@@ -180,8 +182,8 @@ mod tests {
 
             // Encode entry
             let preprocessed = encode(&query);
-            let distances = distances(&preprocessed, &[encrypted]).next().unwrap();
-            let denominators = denominators(&query.mask, &[entry.mask]).next().unwrap();
+            let distances = distances(&preprocessed, &encrypted);
+            let denominators = denominators(&query.mask, &entry.mask);
 
             // Measure encoded distance
             let actual = decode_distance(&distances, &denominators);
