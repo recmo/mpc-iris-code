@@ -1,7 +1,9 @@
 [package]
 name = "mpc-iris-code"
-version = "0.1.0"
+description = "Iris code database using multi-party computation."
+version = "0.8.0"
 edition = "2021"
+authors = ["remco@worldcoin.org"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -12,6 +14,7 @@ bench = ["dep:criterion"]
 [dependencies]
 anyhow = "1.0.79"
 bytemuck = { version = "1.14.0", features = ["derive"] }
+cblas = "0.4.0"
 clap = { version = "4.4.18", features = ["derive", "unicode", "wrap_help"] }
 clap-num = "1.1.1"
 criterion = { version = "0.5.1", optional = true }
@@ -24,8 +27,16 @@ rand = "0.8.5"
 rayon = "1.8.1"
 serde = { version = "1.0.195", features = ["serde_derive"] }
 serde_json = "1.0.111"
+shadow-rs = "0.26.1"
 target-features = "0.1.5"
 tokio = { version = "1.35.1", features = ["full"] }
+
+[dev-dependencies]
+float_eq = "1.0.1"
+proptest = "1.4.0"
+
+[build-dependencies]
+shadow-rs = "0.26.1"
 
 # cargo bench --bench bench --features bench
 [[bench]]
@@ -48,7 +59,3 @@ debug = true
 # We want tfhe and other deps to always be build optimized, otherwise tests will run very slow.
 [profile.dev.package."*"]
 opt-level = 3
-
-[dev-dependencies]
-float_eq = "1.0.1"
-proptest = "1.4.0"

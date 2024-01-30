@@ -1,6 +1,7 @@
 mod generic; // Generic implementation
 mod sve; // SVE2
 
+// Use generic, as the auto-vectorization is great and supports SVE.
 pub use generic::{dot_bool, dot_u16};
 
 #[cfg(feature = "bench")]
@@ -49,7 +50,7 @@ pub mod benches {
     ) {
         let mut rng = thread_rng();
         let mut group = criterion.benchmark_group(name);
-        for (a, b) in [(1, 1), (1, 1000), (31, 1000), (1, 100_000)] {
+        for (a, b) in [(1, 1), (1, 1000), (31, 1000), (1, 100_000), (31, 100_000)] {
             group.throughput(Throughput::Elements(a * b));
             group.sample_size(if a * b > 10_000 { 10 } else { 100 });
             let a_vals = (0..a)

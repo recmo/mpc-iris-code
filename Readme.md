@@ -136,13 +136,12 @@ $$
 
 ### Batching
 
----
+## References
 
-
-**Idea.** Use Freivald's algorithm to verify the matrix multiplication in MPC setting.
-
+Godbolt compiler arguments: `--edition=2021 --target aarch64-unknown-linux-gnu -C opt-level=3 -C lto=fat --C target-cpu=neoverse-v1`
 
 https://dougallj.github.io/applecpu/firestorm.html
 
 https://kitoslab-eng.blogspot.com/2012/10/armv8-aarch64-instruction-encoding.html
 
+https://chipsandcheese.com/2022/05/29/graviton-3-first-impressions/

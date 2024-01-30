@@ -19,6 +19,7 @@ use rayon::{
     prelude::*,
     ThreadPoolBuilder,
 };
+use shadow_rs::shadow;
 use std::{
     cmp::min,
     mem::{size_of, swap},
@@ -40,8 +41,11 @@ use tokio::{
     sync::mpsc,
 };
 
+shadow!(build);
+
 /// Search for a pattern in a file and display the lines that contain it.
 #[derive(Parser)]
+#[command(author, about, long_version=build::CLAP_LONG_VERSION)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -162,19 +166,13 @@ async fn main() -> Result<(), anyhow::Error> {
     pool_builder.build_global()?;
 
     eprintln!(
-        "Using {} compute threads on {} cores.",
-        current_num_threads(),
-        available_parallelism()?
-    );
-    eprintln!(
         "CPU features: {}",
         CURRENT_TARGET.features().map(|f| f.name()).join(", ")
     );
     eprintln!(
-        "u16 simd width: {}",
-        CURRENT_TARGET
-            .suggested_simd_width::<u16>()
-            .unwrap_or_default()
+        "Using {} compute threads on {} cores.",
+        current_num_threads(),
+        available_parallelism()?
     );
 
     let byte_style = ProgressStyle::with_template(
