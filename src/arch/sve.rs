@@ -1,4 +1,4 @@
-#![cfg(target_feature = "sve2")]
+#![cfg(target_feature = "sve")]
 #![allow(unused)]
 use crate::{bits::LIMBS, BITS};
 
@@ -25,7 +25,7 @@ pub mod benches {
     use criterion::Criterion;
 
     pub fn group(criterion: &mut Criterion) {
-        bench_dot_bool(criterion, "sve2/dot_bool", dot_bool);
-        bench_dot_u16(criterion, "sve2/dot_u16", dot_u16);
+        bench_dot_bool(criterion, "sve/dot_bool", dot_bool);
+        bench_dot_u16(criterion, "sve/dot_u16", dot_u16);
     }
 }

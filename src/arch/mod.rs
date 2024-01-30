@@ -1,5 +1,5 @@
 mod generic; // Generic implementation
-mod sve2; // SVE2
+mod sve; // SVE2
 
 pub use generic::{dot_bool, dot_u16};
 
