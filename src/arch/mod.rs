@@ -13,6 +13,9 @@ pub mod benches {
 
     pub fn group(c: &mut Criterion) {
         generic::benches::group(c);
+
+        #[cfg(target_feature = "sve")]
+        sve::benches::group(c);
     }
 
     pub fn bench_dot_bool(
