@@ -70,4 +70,9 @@ def matches(query, threshold, indices = All):
   * If separate, does the caller guarantee that the uniqueness constraint is upheld?
 * Do we want to do filtering for V2?
 * Can we assume no meaningful information leakage from revealing individual boolean match results?
+* Can we specify a 'safe range' for treshold to avoid information leakage?
+* Can we also constrain the set of indices, e.g. one thousand out of the last hundred-thousand inserted.
 * What is the distribution of sizes of the `matches` set for individual eyes?
+* Do we need to check that masks have sufficient bits available in the intersection?
+* Can we and do we want to do filtering for V2?
+* Are secret masks a requirement?
