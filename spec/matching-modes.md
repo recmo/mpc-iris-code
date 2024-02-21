@@ -69,4 +69,5 @@ def matches(query, threshold, indices = All):
 * Should enrollment also insert into the database or is this a separate operation?
   * If separate, does the caller guarantee that the uniqueness constraint is upheld?
 * Do we want to do filtering for V2?
-* We assume no meaningful information leakage from match results.
+* Can we assume no meaningful information leakage from revealing individual boolean match results?
+* What is the distribution of sizes of the `matches` set for individual eyes?
