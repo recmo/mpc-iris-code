@@ -1,5 +1,7 @@
 /target
 /data
+/papers
+.venv
 profile.json
 test.json
 mpc.*
