@@ -1,23 +1,40 @@
 # Specification
 
 $$
-\def\vec#1{\mathbf{#1}}
-\def\T{\mathsf{T}}
-\def\F{\mathsf{F}}
-\def\U{\mathsf{U}}
-\def\popcount{\mathtt{popcount}}
-\def\count{\mathtt{count}}
-\def\fhd{\mathtt{fhd}}
-\def\vsum{\mathtt{sum}}
+\gdef\delim#1#2#3{\mathopen{}\mathclose{\left#1 #2 \right#3}}
+\gdef\p#1{\delim({#1})}
+\gdef\ps#1{\delim\{{#1}\}}
+\gdef\box#1{\delim[{#1}]}
+\gdef\vec#1{\mathbf{#1}}
+\gdef\mat#1{\mathrm{#1}}
+\gdef\setn#1{\mathcal{#1}}
+\gdef\sss#1{\mathcal{#1}}
+\gdef\T{\mathsf{T}}
+\gdef\F{\mathsf{F}}
+\gdef\U{\mathsf{U}}
+\gdef\popcount{\mathtt{popcount}}
+\gdef\count{\mathtt{count}}
+\gdef\fhd{\mathtt{fhd}}
+\gdef\vsum{\mathtt{sum}}
 $$
 
-First we need some definitions and theory on masked bitvectors and their representation in $ℤ_{2^{16}}$ and present a simple secure multiparty computation scheme.
+## MPC
 
-## Masked bitvectors
+Denote with $[–]_{\sss S}$ an encoding in a Linear Secret Sharing Scheme (LSSS) $\sss S$ over some ring $𝕂$ such that for $a ∈ 𝕂$ the encoded secret is $[a]_{\sss S}$. Similarly for $\vec a ∈ 𝕂^n$ let $[\vec a]_{\sss S}$ represent the $n$ shared secrets to encode $\vec a$. The linearity (really affinity) allows us to compute $[\vec b]_{\sss S} = \mat A ⋅ [\vec a]_{\sss S} + \vec c$ locally without communication for any $\mat A ∈ 𝕂^{m×n}, \vec c ∈𝕂^m$. Furthermore there are protocols (potentially with communication) to compute
+
+ *  The product of two values $[a]_{\sss S}, [b]_{\sss S}$ in some output scheme $\sss O$, denoted as
+    $$[a ⋅ b]_{\sss O} = [a]_{\sss S}⋅[b]_{\sss S}$$
+ *  The inner product of two values $[\vec a]_{\sss S}, [\vec b]_{\sss S}$:
+    $$[\vec a ⋅ \vec b]_{\sss O} = [\vec a]_{\sss S}⋅[\vec b]_{\sss S}$$
+*   The conversion between two schemes $[a]_{\sss A}$ and $[a]_{\sss B}$, which may or may not have the same ring $𝕂$.
+
+## Iris codes
+
+First we need some definitions and theory on masked bitvectors and their representation in a ring $𝕂$. 
 
 ### Binary operations in rings
 
-Given a bitvector $\vec b ∈ \{\F,\T\}^n$ of length $n$, we take the usual binary operations of *not* $¬$, *and* $∧$, *or* $∨$, *xor* $⊕$, and also $\popcount$. We can embed this in a ring $R$ by representing $\F,\T$ as $0,1$ respectively and using the following operations on vectors $\vec b ∈ R^n$:
+Given a bitvector $\vec b ∈ \{\F,\T\}^n$ of length $n$, we take the usual binary operations of *not* $¬$, *and* $∧$, *or* $∨$, *xor* $⊕$, and also $\popcount$. We can embed this in a ring $𝕂$ by representing $\F,\T$ as $0,1$ respectively and using the following operations on vectors $\vec b ∈ 𝕂^n$:
 
 $$
 \begin{aligned}
@@ -29,7 +46,7 @@ $$
 \end{aligned}
 $$
 
-Where $⊙$ is the element wise product and $\vsum$ adds the vector elements. Note that $\vsum(\vec a ⊙ \vec b)$ is the vector dot product $\vec a ⋅ \vec b$. Note also that the $\popcount$ will be computed in the ring, so a sufficiently large modular ring is required.
+Where $⊙$ is the element wise product and $\vsum$ adds the vector elements. Note that $\vsum(\vec a ⊙ \vec b)$ is the vector dot product $\vec a ⋅ \vec b$. Note also that the $\popcount$ will be computed in the ring, so a sufficiently large ring is required.
 
 ### Masked binary operations in rings
 
@@ -85,7 +102,7 @@ $$
 {\vsum\left((-\vec a ⊙ \vec b)^{⊙2}\right)} 
 &&=\frac{1}{2} -\frac
 { \vsum\left(\vec a ⊙ \vec b\right)}
-{2⋅\vsum\left((\vec a ⊙ \vec b)^{⊙2}\right)}  \\
+{2⋅\vsum\left((\vec a ⊙ \vec b)^{⊙2}\right)} \\
 \end{aligned}
 $$
 
@@ -95,59 +112,13 @@ $$
 \vsum\left((\vec a ⊙ \vec b)^{⊙2}\right) = \popcount(\vec a_m ∧ \vec b_m)
 $$
 
-## Secure Multiparty Computation
+### Iris codes
 
-We construct a simple secret sharing scheme over $ℤ_{2^{16}}$. To encrypt a value $x$ we compute $n$ random secret shares $x_0,…,x_{n-1}$ such that
-
-$$
-x = \sum_{i∈[0,n)} x_i
-$$
-
-One way to do this is by generating $n-1$ random values $x_0,…,x_{n-2}∈ℤ_{2^{16}}$ and solving for $x_{n-1}$:
-
-$$
-x_{n-1} = x - \sum_{i∈[0,n-1)} x_i
-$$
-
-The shares are encrypted in the sense that this is essentially a [one-time-pad] with any $n-1$ shares being the decryption key for the remaining share. Another valid perspective is that the shares are independently random and the secret is stored in their correlation.
-
-[one-time-pad]: https://en.wikipedia.org/wiki/One-time_pad
-
-### Additive homomorphism
-
-This secret sharing scheme is additive homomorphic. Given two secrets $a$ and $b$ with shares $a_i$ and $b_i$, each party can locally compute $c_i = a_i + b_i$. These $c_i$ are valid shares for the sum $c = a + b$.
-
-Similarly we can compute the product of a secret $a$ with shares $a_i$ and a constant $b ∈ ℤ_{2^{16}}$ locally as $c_i = a_i ⋅ b$.
-
-Generalizing this, given a secret vector $\vec a ∈ ℤ_{2^{16}}^n$ and a cleartext vector $\vec b ∈ ℤ_{2^{16}}^n$ we can compute shares of the dot product $\vec c = \vec a ⋅ \vec b$ as $c_i = \sum_j a_{ij} \cdot b_j$.
-
-Note that these newly created shares are correlated with the input secret shares. To solve this, they need to be re-randomized.
-
-### Re-randomizing
-
-To re-randomize results we construct secret shares of zero and add them to the result. One way to do this locally is for each party to have two random number generators, $r_0, …, r_{n-1}$ and some cyclic permutation $r_{σ(0)}, … r_{σ(n-1)}$. The a secret share $a_i$ is locally updated as:
-
-$$
-a_i' = a_i + r_i - r_{σ(i)}
-$$
-
-One method for parties $i$ and $σ(i)$ to establish shared randomness is by using [Diffie-Hellman][DH] to establish a seed for a cryptographic PRNG.
-
-[DH]: https://en.wikipedia.org/wiki/Diffie%E2%80%93Hellman_key_exchange
-
-## Iris codes
-
-For present purposes an iriscode is a $12\ 800$-bit masked bitvector.
-
-### Rotations
-
-The $12\ 800$ masked bitvectors can be interpreted as $64 × 200$ bit matrices. We can then define a rotation as a permutation on the columns:
+The iris code is a $12\ 800$-bit masked bitvector. The $12\ 800$ masked bitvectors can be interpreted as $64 × 200$ bit matrices. We can then define a rotation as a permutation on the columns:
 
 $$
 \mathtt{rot}(\vec b, n)[i,j] = \vec b[i,(j+n)\ \mathrm{mod}\ 200]
 $$
-
-### Distance
 
 The *distance* between two iriscodes $\mathtt a$ and $\mathtt b$ is defined as the minimum distance over rotations from $-15$ to $15$:
 
@@ -155,95 +126,139 @@ $$
 \mathtt{dist}(\vec a, \vec b) = \min_{r∈[-15,15]}\ \fhd(\mathtt{rot}(\vec a, r), \vec b)
 $$
 
-### Uniqueness
-
-To verify uniqueness we require that an iriscode $\vec a$ is a certain minimum distance from all previous iriscodes:
+Two iris codes are a match if their distance is less than some threshold
 
 $$
-\mathop{\Large ∀}\limits_{\vec b ∈ \mathtt{DB}}\ 
-\mathtt{dist}(\vec a, \vec b) > \mathrm{threshold}
+\mathtt{dist}(\vec a, \vec b) < \mathrm{threshold}
 $$
 
-where $\mathtt{DB}$ is the set of already registered iriscodes (currently 3 million entries).
+The main query we are interested in computing (see [matching modes](./matching-modes.md)) is: given an iris code $\vec q$, a large set of iris codes $\mathrm{DB}$, a subset of indices $\setn I$, and a threshold $t$ return
 
-When there is a match, we are also interested in finding the location of the best match. Both can be addressed by implementing a method that returns the index of the minimum distance entry.
+$$
+\set{i ∈ \setn I \mid \mathtt{dist}(\vec q, \mathrm{DB}[i]) < t }
+$$
 
 ## Iriscode SMPC v2
 
-Objective: iriscodes, masks and distances always encrypted. Threshold plaintext.
+[Requirements](./requirements.md): iris code bits and mask secret (both queries and database), distances secret. Threshold plaintext. It is acceptable to leak individual match bits for rotations.
 
-Observe that 
+Take $𝕂$ to be a ring large enough to represent the popcount (e.g. $ℤ_{2^{16}}$ or $𝔽_{2^{16} - 17}$). Iris codes are encoded as $12,800$ dimensional masked bitvectors over this ring.
 
-$$
-\mathrm{threshold}
-≥ \mathtt{dist}(\vec a, \vec b) 
-= \min_{r∈[-15,15]}\ \fhd(\mathtt{rot}(\vec a, r), \vec b)
-$$
-
-is the same as the 'or' of the 31 individual checks.
+We have a database $\mat D ∈ 𝕂^{N×12,800}$ encoded as $[\mat D]$. Given a query $\vec q ∈ 𝕂^{12,800}$ as $[\vec q]$, a threshold $t$ and an index set $\setn I$, we want to return the result
 
 $$
-\bigvee_{r∈[-15,15]}\ \mathrm{threshold}
-≥\fhd(\mathtt{rot}(\vec a, r), \vec b)
+\set{i ∈ \setn I \mid \mathtt{dist}([\vec q], [\mat D_i]) < t }
+$$
+
+### Rotations to queries
+
+Observe that a $\mathtt{dist}$ threshold checks is the logical 'or' of 31 rotated fractional hamming threshold checks, i.e. the following are equivalent:
+
+$$
+\mathtt{dist}(\vec a, \vec b) < t
 $$
 
 $$
-\mathrm{threshold} ≥\fhd(\mathtt{rot}(\vec a, r), \vec b)
+\p{\min_{r∈[-15,15]}\ \fhd(\mathtt{rot}(\vec a, r), \vec b)} < t
 $$
 
-Iriscodes are shared as masked bitvectors.
+$$
+\bigvee_{r∈[-15,15]}\ \p{\fhd(\mathtt{rot}(\vec a, r), \vec b) < t}
+$$
 
-The threshold check can be converted to a sign-bit check if we have an approximation of $\mathrm{threshold}$ as a fraction $\frac ab$.
+Since a rotation is a permutation it can be computed locally (as permutations can be represented by matrices). So for a given query $[\vec q]$ we pre-compute $31$ queries
+
+$$
+[\vec q_r] = \mathtt{rot}([\vec q], r)
+$$
+
+This allows us to compute
+
+$$
+⋃_{r∈[-15,15]}
+\set{i ∈ \setn I \mid \fhd([\vec q_r], [\mat D_i]) < t }
+$$
+
+We do this by computing and revealing individual comparison bits $[\fhd(\vec q_r, \mat D_i) < t]$ and aggregating indices in cleartext.
+
+### Fractional hamming threshold
+
+Given $[\vec q]$, $[\vec d]$, and $t$ we want to compute and reveal $[\fhd(\vec q, \vec d) < t]$. Expanding definitions and simplifying we get
 
 $$
 \begin{aligned}
-\mathrm{threshold} &≥\fhd(\mathtt{rot}(\vec a, r), \vec b) \\
-\frac{a}{b} &≥ \frac
-{1 - \vsum\left(\vec a ⊙ \vec b\right)}
-{2⋅\vsum\left((\vec a ⊙ \vec b)^{⊙2}\right)}  \\
-2 ⋅ a ⋅ \vsum\left((\vec a ⊙ \vec b)^{⊙2}\right)
-&≥ b - b ⋅ \vsum\left(\vec a ⊙ \vec b\right) \\
-0 &≥  b
-- b ⋅ \vsum\left(\vec a ⊙ \vec b\right) 
-- 2 ⋅ a ⋅ \vsum\left((\vec a ⊙ \vec b)^{⊙2}\right) \\
+\fhd(\vec q, \vec d) & < t \\
+\frac{1}{2} -\frac
+{ \vsum\p{\vec q ⊙ \vec d}}
+{2⋅\vsum\p{(\vec q ⊙ \vec d)^{⊙2}}}
+&< t \\
+\frac
+{ \vsum\p{\vec q ⊙ \vec d}}
+{\vsum\p{(\vec q ⊙ \vec d)^{⊙2}}}
+&> 1 - 2⋅t 
 \end{aligned}
 $$
 
-Call the expression on the rhs $f_{a,b}(\vec a, \vec b)$:
+We now need to get it from the rational to the integer domain:
 
 $$
-f_{a,b}(\vec a, \vec b) = b
-- b ⋅ \vsum\left(\vec a ⊙ \vec b\right)
-- 2 ⋅ a ⋅ \vsum\left((\vec a ⊙ \vec b)^{⊙2}\right)
+\vsum\p{\vec q ⊙ \vec d} > \p{1 - 2⋅t}⋅\vsum\p{(\vec q ⊙ \vec d)^{⊙2}}
 $$
 
-Computing $(\vec a ⊙ \vec b)^{⊙2}$ requires two consecutive multiply operations, which would mean an interactive protocol. This computations is just $\count(\vec a ⊕ \vec b)$ and can be computed directly from the masks as
+Approximate $\p{1 - 2⋅t}$ by some fraction $\frac ab$, then this becomes an integer sign check
 
 $$
-\vsum\left(\vec a_{\mathrm m} ⊙ \vec b_{\mathrm m}\right)
+b ⋅ \vsum\p{\vec q ⊙ \vec d} - a⋅\vsum\p{(\vec q ⊙ \vec d)^{⊙2}} > 0
 $$
 
-where $\vec a_{\mathrm m}$ is the bitvector representing the mask of $\vec a$. These can be stored in a separate database. This doubles the storage (and memory bandwidth) requirements, but reduces the communication complexity by $12,800×$, which seems a worthwhile tradeoff.
-
-We can then compute an non-replicated secret share of $[f(\vec a, \vec b)]_{\mathrm{a}}$ locally, given replicated shares $[\vec a]_{\mathrm r}$, $[\vec a_{\mathrm m}]_{\mathrm r}$, $[\vec b]_{\mathrm r}$, $[\vec b_{\mathrm m}]_{\mathrm r}$ by using the linearity:
 
 $$
-[f_{a,b}(\vec a, \vec b)]_{\mathrm{a}} =
-b
-- b ⋅ \vsum\left([\vec a]_{\mathrm r} ⊙ [\vec b]_{\mathrm r}\right)
-- 2 ⋅ a ⋅ \vsum\left([\vec a_{\mathrm m}]_{\mathrm r} ⊙ [\vec b_{\mathrm m}]_{\mathrm r}\right)
+b ⋅ \p{[\vec q] ⋅ [\vec d]} - a⋅[\vsum\p{(\vec q ⊙ \vec d)^{⊙2}} > 0
 $$
 
-The threshold constants can be mostly pushed into the query $\vec a$. Together with a secret $[b]_{\mathrm a}$ this allows a secret threshold value:
+**Q.** Do we want the quartic equation or a separate encrypted mask? Assume separate for now.
+
+We thus need to compute the sign of the expression
 
 $$
-[f_{a,b}(\vec a, \vec b)]_{\mathrm{a}} =
-[b]_{\mathrm a}
-- \vsum\left([b ⋅ \vec a]_{\mathrm r} ⊙ [\vec b]_{\mathrm r}\right)
--\vsum\left([2 ⋅ a ⋅ \vec a_{\mathrm m}]_{\mathrm r} ⊙ [\vec b_{\mathrm m}]_{\mathrm r}\right)
+b ⋅ \p{[\vec q] ⋅ [\vec d]} - a ⋅ \p{[\vec q_{\mathrm m}] ⋅ [\vec d_{\mathrm m}]}
 $$
 
-Another interesting observation is the near-simplification due to Bryan:
+To do this we first compute the two dot products $[\vec q] ⋅ [\vec d]$ and $[\vec q_{\mathrm m}] ⋅ [\vec d_{\mathrm m}]$ in a ring $|𝕂| ≥ 12,800$. Then we lift these results to a larger ring using double-randomness and compute the above integer. It should suffice to have $|𝕂| > 12,800⋅\p{a + b}$.
+
+Finally we apply a most-significant-bit extraction protocol to obtain the result of the comparison.
+
+## Cost analysis
+
+* Two masked bit vectors per query and database entry in a ring $|𝕂| ≥ 12,800$.
+* Two dot products per (rotated) query.
+* Two conversions to larger ring.
+    * Two double-randomness generations.
+    * Two decoding operations.
+* One MSB extraction.
+
+Concrete numbers:
+
+* ABY3 (3 party, small ring $ℤ_{2^{16}}$):
+    * Database: 8-bytes per record.
+    * Computation: $2⋅2$ times a $12,800$ sized `u16×u16→u16` dot product.
+    * Communication: ?
+* Shamir (3 party, field $𝔽_{2^{16}-17}$):
+    * Database: 4-bytes per record.
+    * Computation: $2$ times a $12,800$ sized `u16×u16→u32` dot product.
+    * Communication: ?
+
+## Appendix
+
+**Q.** How accurate does the threshold need to be? The reference implementation uses `f64`, which has $53$ bits of precision. Add to this the ~14 bits we need for the popcounts and the above expression would need to be evaluated in $67$ bits!
+
+**Q.** In Shamir the interpolation polynomial $P(X)$ has substantial additional structure in that $P(x_s) ∈ \set{-1,0,1}$, i.e. $P(x_s)$ is a root of $X^3-X$. Can this be used as a 'low-degree' constraint? The goal here is to find a way to locally compute the quartic term on the RHS.
+
+**Q.** In Shamir, if we want to square a number we have more constraints on the output polynomial. Can we use this as a substitute for degree reduction?
+
+---
+
+**Idea.** An interesting observation due to Bryan is the near-simplification:
 
 $$
 \begin{aligned}
@@ -255,162 +270,3 @@ $$
 $$
 
 The cross-terms here are noisy, but if the iris code are centered in that their expected value is zero, then both these cross terms also have an expected value of zero. With this trick the performance is essentially the same as in v0.
-
-After $[f]_{\mathrm a}$ is computed we need to compute it's sign. For this it needs to be evaluated in a ring large enough that the minimum possible value and maximum possible value do not overlap.
-
-#### Extracting the sign bit
-
-We need a function that splits the ring into two contiguous ranges $[a..b)$ and $[b..a)$ (wrapping around the modulus as needed), such that $f(x)$ is either of two values depending on which range $x$ falls in.
-
-##### Algebraically
-
-**Theorem.** The $\mathrm{sign}$ function, that takes the most significant bit and exposes it through the least significant bit, is not polynomial in $ℤ_{2^k}$ for $k>1$. So it can not be construct using ring operations. 
-
-In a field like $ℤ_5$ such functions exist, for example $3⋅x + x^3+x^4$. Without loss of generality we can assume the outputs are $0$ and $1$, as this adds only a linear transform. Similarly we can assume $a=0$, so the function has a factor $\prod_{x∈[0,b)]}(X - x)$ and is of degree at least $b$. This takes at least $\log_2 b$ multiply operations to construct.
-
-##### Binary
-
-Given shares $s_0…s_{n-1}$ in $ℤ_{2^k}$, we can locally convert these to values in $ℤ_{2^m}×ℤ_{2^n}$ by splitting the bits. The lower part are already valid shares as is. The upper part is close, but misses a carry value $c∈[0,n-1)$, or $\lfloor \log_2 n \rfloor$ bits. It suffices to evaluate $c$ in $ℤ_{2^m}$, so we need only $b = \min(m, \lfloor \log_2 n \rfloor)$ bits.
-
-The carry bits do not contain any revealing information [citation needed].
-
-We can compute this carry value by combining the shares in a larger ring $ℤ_{2^{n + b}}$. But this would also reveal the lower bits.
-
-[PSSY20]
-
-Can we do lifting? Given a secret in $ℤ_{2^{n}}$ create a secret in $ℤ_{2^{n + b}}$? If such a process is efficient we can then use it to subtract the sensitive lower bits.
-
-In $ℤ_2$ we can construct binary operations $∧, ⊕$ as $⋅,+$. This allows us to algebraically express the two-value carry function $\mathrm{carry}_2(a, b) = a \cdot b$ and the three value carry function 
-
-$$
-\begin{aligned}
-\mathrm{carry}_2(a, b) &= a ⋅ b \\
-\mathrm{carry}_3(a, b, c) &= a ⋅ b
-\end{aligned}
-$$
-
-Question: Is there a two-value carry function for larger domains? $ℤ_{2^{n}}×ℤ_{2^{n}} → ℤ_{2}$. E.g. we are looking for an $f ∈ ℤ_4[X,Y]$ s.t.
-
-$$
-f(X, Y) = \left⌊ \frac{X + Y}{4} \right⌋
-$$
-
-Where the RHS is evaluated over $ℕ$.
-
-$$
-\begin{array}{c|cccc}
-&   0 & 1 & 2 & 3 \\ \hline
-0 & 0 & 0 & 0 & 0 \\
-1 & 0 & 0 & 0 & 1 \\
-2 & 0 & 0 & 1 & 1 \\
-3 & 0 & 1 & 1 & 1 \\
-\end{array}
-$$
-
-This can not exists, as $f(2,Y)$ would be the sign function polynomial I claimed was impossible before.
-
-
-Question: If we re-interpret $ℤ_4$ as Galois Field $𝔽_4$, i.e. as $𝔽_2[X] / (X)$ or $𝔽_2[X] / (1 + X)$, can we then create this function?
-
-
-$$
-f(a, b) = a^2⋅b^2 + 3⋅a^2⋅b + 3⋅a⋅b^2 + 2⋅a⋅b + a + b
-$$
-
-$$
-(a ⋅ b + 2) ⋅ (a ⋅ b + 3 ⋅ (a + b))
-$$
-
-This can be evaluated in two rounds.
-
-$$
-\begin{array}{c|cccc}
-f & 00 & 01 & 10 & 11 \\ \hline
-00 & 0 & 0 & 0 & 0 \\
-01 & 0 & 0 & 0 & 1 \\
-10 & 0 & 0 & 1 & 1 \\
-11 & 0 & 1 & 1 & 1 \\
-\end{array}
-$$
-
-##### Operations
-
-* Secret shared as arithmetic sum.
-    * Addition / subtraction.
-    * Scalar multiplication.
-    * Reduction to subgroup.
-    * Replicated
-        * Multiplication
-* 
-
----
-
-For each iriscode $\vec b_i$ in the database $\mathtt{DB}$ we convert it to a masked bitvector embedded in the ring $ℤ_{2^{16}}$. We then create secret shares such that each party $j$ has a share $\vec b_{ij}$.
-
-Given a query iriscode $\vec a$, also encoded as a masked bitvector embedded in $ℤ_{2^{16}}$, but not converted to secret shares. Each party $j$ computes rotations of the query $r∈[-15,15]$ and computes the following with each database share $\vec b_{ij}$:
-
-$$
-d_{ijr} = \vsum(\mathtt{rot}(\vec a, r) ⊙ \vec b_{ij})
-$$
-
-Each party produces $31 ⋅ |\mathtt{DB}|$ values this way. These values are aggregated in the coordinator, which can decrypt the results
-
-$$
-d_{ir} = \sum_j d_{ijr} = \vsum(\mathtt{rot}(\vec a, r) ⊙ \vec b_{i})
-$$
-
-The coordinator has a database of only the masks $\vec b_{i\ \mathrm{m}}$ as regular bitvectors. This allows it to compute
-
-$$
-m_{ir} = \popcount(\mathtt{rot}(\vec a_{\mathrm{m}}, r) ∧ \vec b_{i\,\mathrm{m}})
-$$
-
-With both these pieces of information, the coordinator can compute the $\fhd$ between the query $\vec a$ and database entry $\vec b_i$.
-
-$$
-\mathtt{dist}(\vec a, \vec b_i) =
-\min_{r∈[-15,15]}\ \left( \frac12 - \frac
-{d_{ir}}
-{2⋅m_{ir}} \right)
-$$
-
-To see that this work we can substitute back all the definitions from above:
-
-$$
-\begin{aligned}
-\mathtt{dist}(\vec a, \vec b_i) &=
-\min_{r∈[-15,15]}\ \left( \frac12 - \frac
-{d_{ir}}
-{2⋅m_{ir}} \right) \\
-\min_{r∈[-15,15]}\ \fhd(\mathtt{rot}(\vec a, r), \vec b_i) &=
-\min_{r∈[-15,15]}\ \left( \frac12 - \frac
-{\sum_j d_{ijr}}
-{2⋅\popcount(\vec a_{\mathrm{m}} ∧ \vec b_{i\,\mathrm{m}})} \right) \\
-\fhd(\mathtt{rot}(\vec a, r), \vec b_i) &=
-\frac12 - \frac
-{\vsum(\mathtt{rot}(\vec a, r) ⊙ \vec b_{i})}
-{2⋅\vsum\left((\mathtt{rot}(\vec a, r) ⊙ \vec b_{i})^{⊙2}\right)} \\
-\end{aligned}
-$$
-
-## References
-
-* [MRZ15] Payman Mohassel, Mike Rosulek, and Ye Zhang (2015). Fast and Secure Three-party Computation: The Garbled Circuit Approach.
-* [AFL+16] Toshinori Araki, Jun Furukawa, Yehuda Lindell, Ariel Nof, and Kazuma Ohara (2016) High-Throughput Semi-Honest Secure Three-Party Computation with an Honest Majority.
-* [MZ17] Payman Mohassel and Yupeng Zhang (2017). SecureML: A System for Scalable Privacy-Preserving Machine Learning.
-* [MR18] Payman Mohassel and Peter Rindal (2018). ABY3: A Mixed Protocol Framework for Machine Learning.
-* [CRS19] Harsh Chaudhari, Rahul Rachuri, and Ajith Suresh (2019). Trident: Efficient 4PC Framework for Privacy Preserving Machine Learning.
-* [BCPS19] Megha Byali, Harsh Chaudhari, Arpita Patra, and Ajith Suresh (2019). FLASH: Fast and Robust Framework for Privacy-preserving Machine Learning.
-* [PS20] Arpita Patra and Ajith Suresh (2020). BLAZE: Blazing Fast Privacy-Preserving Machine Learning.
-* [PSSY20] Arpita Patra, Thomas Schneider, Ajith Suresh, and Hossein Yalame (2020). ABY2.0: Improved Mixed-Protocol Secure Two-Party Computation.
-
-[MRZ15]: https://eprint.iacr.org/2015/931.pdf
-[AFL+16]: https://eprint.iacr.org/2016/768.pdf
-[MZ17]: https://eprint.iacr.org/2017/396.pdf
-[MR18]: https://eprint.iacr.org/2018/403.pdf
-[CRS19]: https://eprint.iacr.org/2019/1315.pdf
-[BCPS19]: https://eprint.iacr.org/2019/1365.pdf
-[PS20]: https://eprint.iacr.org/2020/042.pdf
-[PSSY20]: https://eprint.iacr.org/2020/1225.pdf
-
-
