@@ -51,6 +51,7 @@ Necessary:
 * E2E encryption. PKI.
 * Semi-honest security through MPC.
 * Malicious secure through trusted execution environment.
+* Threshold as a 6-significant digit figure in the range $(0,1)$, with interesting values around $0.375$.
 
 Desirable:
 

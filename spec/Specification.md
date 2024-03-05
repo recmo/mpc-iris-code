@@ -211,7 +211,6 @@ $$
 b ⋅ \vsum\p{\vec q ⊙ \vec d} - a⋅\vsum\p{(\vec q ⊙ \vec d)^{⊙2}} > 0
 $$
 
-
 $$
 b ⋅ \p{[\vec q] ⋅ [\vec d]} - a⋅[\vsum\p{(\vec q ⊙ \vec d)^{⊙2}} > 0
 $$
