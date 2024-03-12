@@ -172,6 +172,14 @@ $$
 [\vec q_r] = \mathtt{rot}([\vec q], r)
 $$
 
+$$
+𝔽_{2^{16}-17}
+$$
+
+$$
+\left\lceil{log_2\ 12\ 800}\right\rceil = 14
+$$
+
 This allows us to compute
 
 $$

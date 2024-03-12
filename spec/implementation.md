@@ -2,16 +2,22 @@
 
 Following the [protocol specification](./specification.md) the following needs to be computed:
 
-
 ## Implementing $𝔽_{2^{16} - 17}$
-
-
 
 ## Operating cost
 
+Considering two machines:
+
+* [m7gd.metal] Graviton 3, 64 cores, 256GB mem, 30 Gb/s,  $2025.31/month (spot), $918.70/month (3y reserved).
+* [p5.48xlarge] AMD EPYC 7R13 (192 cores), 2TB mem,  8x Nvidia H100 , 3200 Gb/s. $76,797/month (spot).  $33,709/month (3y reserved).
+
+[m7g.16xlarge]: https://instances.vantage.sh/aws/ec2/m7gd.metal?region=eu-north-1&cost_duration=monthly
+[p5.48xlarge]: https://instances.vantage.sh/aws/ec2/p5.48xlarge?region=eu-north-1&cost_duration=monthly
+
+
 ### Benchmarks
 
-
+### Communication
 
 ## Future Optimizations
 

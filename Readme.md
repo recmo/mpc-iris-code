@@ -35,3 +35,14 @@ Some useful resources for low-level Apple Silicon and Graviton optimization:
 ## Specification
 
 See the [Specification](specification.ipynb) notebook. (Moved to a notebook because of [this issue](https://github.com/github/markup/issues/1551)).
+
+
+## Benchmarking
+
+Using [samply]:
+
+[samply]: https://github.com/mstange/samply
+
+```sh
+RUSTFLAGS="-Ctarget-cpu=native" samply record --rate 10000 cargo bench --profile profiling --bench bench --features bench
+```
