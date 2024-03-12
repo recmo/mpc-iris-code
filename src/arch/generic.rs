@@ -108,7 +108,7 @@ pub mod benches {
         rng.fill_bytes(cast_slice_mut(q.as_mut_slice()));
         rng.fill_bytes(cast_slice_mut(d.as_mut_slice()));
 
-        eprintln!("Benchmarking ({n_batch}×{n_code})⋅({n_code}×{n_db}) multiplication in ℤ_2^16.");
+        eprintln!("Benchmarking ({n_batch}×{n_code})⋅({n_code}×{n_db}) multiplication in ℤ_2¹⁶.");
         let start = Instant::now();
         {
             let (q, d) = black_box((&q, &d));
@@ -151,7 +151,7 @@ pub mod benches {
         rng.fill_bytes(cast_slice_mut(q.as_mut_slice()));
         rng.fill_bytes(cast_slice_mut(d.as_mut_slice()));
 
-        eprintln!("Benchmarking ({n_batch}×{n_code})⋅({n_code}×{n_db}) multiplication in ℤ_2^16.");
+        eprintln!("Benchmarking ({n_batch}×{n_code})⋅({n_code}×{n_db}) multiplication in 𝔽_p.");
         let start = Instant::now();
         {
             let (q, d) = black_box((&q, &d));
